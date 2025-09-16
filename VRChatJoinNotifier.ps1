@@ -219,7 +219,8 @@ function Send-Pushover($Title,$Message){
 function Score-LogFile([System.IO.FileInfo]$f){
   $a = $f.LastWriteTimeUtc
   $b = $f.CreationTimeUtc
-  $best = if ($a -gt $b) { $a } else { $b }
+  $best = $a
+  if($b -gt $best){ $best = $b }
   $m = [regex]::Match($f.Name,'^output_log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.txt$', 'IgnoreCase')
   if($m.Success){
     try{
@@ -261,7 +262,8 @@ function Start-Follow{
     function Score-LogFile([System.IO.FileInfo]$f){
       $a = $f.LastWriteTimeUtc
       $b = $f.CreationTimeUtc
-      $best = if ($a -gt $b) { $a } else { $b }
+      $best = $a
+      if($b -gt $best){ $best = $b }
       $m = [regex]::Match($f.Name,'^output_log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.txt$', 'IgnoreCase')
       if($m.Success){
         try{
@@ -352,7 +354,8 @@ function Process-FollowOutput {
       if($s.StartsWith('PLAYER_JOIN||')){
         if($script:SessionId -le 0){ continue } # ignore before room
         $parts=$s.Split('||',3)
-        $name = if($parts.Length -ge 2 -and $parts[1]){ $parts[1] } else { 'Someone' }
+        $name = 'Someone'
+        if($parts.Length -ge 2 -and $parts[1]){ $name = $parts[1] }
         if(-not $script:SeenPlayers.ContainsKey($name)){
           $script:SeenPlayers[$name]=(Get-Date)
           Notify-All ("join:" + $script:SessionId + ":" + $name) $AppName ($name + " joined your instance.")
@@ -459,7 +462,11 @@ function Show-SettingsForm{
   $txtUser.Location=New-Object System.Drawing.Point(12,130)
   $txtUser.Size=New-Object System.Drawing.Size(300,22)
   $txtUser.UseSystemPasswordChar=$true
-  $txtUser.Text= (if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverUser)) {''} else {'*****'})
+  if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverUser)){
+    $txtUser.Text=''
+  }else{
+    $txtUser.Text='*****'
+  }
 
   $lblToken=New-Object System.Windows.Forms.Label
   $lblToken.Text='Pushover API Token:'
@@ -470,7 +477,11 @@ function Show-SettingsForm{
   $txtToken.Location=New-Object System.Drawing.Point(340,130)
   $txtToken.Size=New-Object System.Drawing.Size(330,22)
   $txtToken.UseSystemPasswordChar=$true
-  $txtToken.Text= (if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverToken)) {''} else {'*****'})
+  if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverToken)){
+    $txtToken.Text=''
+  }else{
+    $txtToken.Text='*****'
+  }
 
   $btnAddStartup=New-Object System.Windows.Forms.Button
   $btnAddStartup.Text='Add to Startup'
@@ -606,7 +617,11 @@ function Start-TrayPulse{
     $global:PulseFrame = -not $global:PulseFrame
     try{
       if($global:TrayIcon){
-        $global:TrayIcon.Icon = (if($global:PulseFrame){ $global:IconPulseA } else { $global:IconPulseB })
+        if($global:PulseFrame){
+          $global:TrayIcon.Icon = $global:IconPulseA
+        }else{
+          $global:TrayIcon.Icon = $global:IconPulseB
+        }
       }
     }catch{}
   })
