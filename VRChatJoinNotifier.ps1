@@ -33,8 +33,10 @@ $DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\Local
 # ---------------- Cooldown (anti-spam) ----------------
 $NotifyCooldownSeconds = 10
 $script:LastNotified = @{}
-$script:SessionId = 0         # increments on OnJoinedRoom
+$script:SessionId = 0         # increments on each detected session
 $script:SeenPlayers = @{}     # name -> first seen time (per session)
+$script:SessionReady = $false # true once current session started
+$script:SessionSource = ''    # remember how the session started
 
 # ---------------- Globals ----------------
 $global:Cfg = $null
@@ -62,6 +64,23 @@ $script:OpenEvt   = $null
 
 # Toast availability
 $script:ToastReady = $false
+
+# ---------------- Session helpers ----------------
+function Reset-SessionState{
+  $script:SessionReady = $false
+  $script:SessionSource = ''
+  $script:SeenPlayers = @{}
+}
+function Ensure-SessionReady([string]$Reason){
+  if($script:SessionReady){ return $false }
+  if([string]::IsNullOrWhiteSpace($Reason)){ $Reason = 'unknown trigger' }
+  $script:SessionId++
+  $script:SessionReady = $true
+  $script:SessionSource = $Reason
+  $script:SeenPlayers = @{}
+  Write-AppLog ("Session " + $script:SessionId + " started (" + $Reason + ").")
+  return $true
+}
 
 # ---------------- Helpers ----------------
 function Ensure-Dir($Path){ if(-not(Test-Path $Path)){ New-Item -ItemType Directory -Path $Path | Out-Null } }
@@ -395,21 +414,27 @@ function Process-FollowOutput {
       if($s.StartsWith('SWITCHED||')){
         $p=$s.Substring(10)
         Write-AppLog ("Switching to newest log: " + $p)
+        Reset-SessionState
         continue
       }
 
       if(-not (Is-VRChatRunning)) { continue }
 
       if($s.StartsWith('SELF_JOIN||')){
-        $script:SessionId++
-        $script:SeenPlayers = @{}
+        if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
+          $script:SessionSource = 'OnJoinedRoom'
+          Write-AppLog ("Session " + $script:SessionId + " confirmed by OnJoinedRoom.")
+        } else {
+          Reset-SessionState
+          [void](Ensure-SessionReady('OnJoinedRoom'))
+        }
         Notify-All ("self:" + $script:SessionId) $AppName 'You joined an instance.'
-        Write-AppLog ("Session " + $script:SessionId + " started (OnJoinedRoom).")
         continue
       }
 
       if($s.StartsWith('PLAYER_JOIN||')){
-        if($script:SessionId -le 0){ continue } # ignore before room
+        if(-not $script:SessionReady){ [void](Ensure-SessionReady('OnPlayerJoined fallback')) }
+        if(-not $script:SessionReady){ continue }
         $parts=$s.Split('||',3)
         $name = 'Someone'
         if($parts.Length -ge 2 -and $parts[1]){ $name = $parts[1] }
