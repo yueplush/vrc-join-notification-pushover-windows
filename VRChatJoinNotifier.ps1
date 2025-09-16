@@ -32,11 +32,13 @@ $DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\Local
 
 # ---------------- Cooldown (anti-spam) ----------------
 $NotifyCooldownSeconds = 10
+$SessionFallbackGraceSeconds = 30 # allow quick OnJoinedRoom confirmations to reuse fallback session
 $script:LastNotified = @{}
 $script:SessionId = 0         # increments on each detected session
 $script:SeenPlayers = @{}     # join key -> first seen time (per session)
 $script:SessionReady = $false # true once current session started
 $script:SessionSource = ''    # remember how the session started
+$script:SessionStartedAt = $null
 
 # ---------------- Globals ----------------
 $global:Cfg = $null
@@ -70,6 +72,7 @@ function Reset-SessionState{
   $script:SessionReady = $false
   $script:SessionSource = ''
   $script:SeenPlayers = @{}
+  $script:SessionStartedAt = $null
 }
 function Ensure-SessionReady([string]$Reason){
   if($script:SessionReady){ return $false }
@@ -78,6 +81,7 @@ function Ensure-SessionReady([string]$Reason){
   $script:SessionReady = $true
   $script:SessionSource = $Reason
   $script:SeenPlayers = @{}
+  $script:SessionStartedAt = Get-Date
   Write-AppLog ("Session " + $script:SessionId + " started (" + $Reason + ").")
   return $true
 }
@@ -478,13 +482,33 @@ function Process-FollowOutput {
       if(-not (Is-VRChatRunning)) { continue }
 
       if($s.StartsWith('SELF_JOIN||')){
+        $reuseFallback = $false
+        $elapsedSinceFallback = $null
         if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
-          $script:SessionSource = 'OnJoinedRoom'
-          Write-AppLog ("Session " + $script:SessionId + " confirmed by OnJoinedRoom.")
-        } else {
+          if($script:SessionStartedAt){
+            try{ $elapsedSinceFallback = (Get-Date) - $script:SessionStartedAt }catch{ $elapsedSinceFallback = $null }
+          }
+
+          if($null -ne $elapsedSinceFallback -and $elapsedSinceFallback.TotalSeconds -lt $SessionFallbackGraceSeconds){
+            $reuseFallback = $true
+            $script:SessionSource = 'OnJoinedRoom'
+            Write-AppLog ("Session " + $script:SessionId + " confirmed by OnJoinedRoom.")
+          }
+        }
+
+        if(-not $reuseFallback){
+          if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
+            $detail = ''
+            if($null -ne $elapsedSinceFallback){
+              $seconds = [Math]::Round([Math]::Max(0,$elapsedSinceFallback.TotalSeconds),1)
+              $detail = " after " + $seconds + 's'
+            }
+            Write-AppLog ("Session " + $script:SessionId + " fallback expired" + $detail + "; starting new session for OnJoinedRoom.")
+          }
           Reset-SessionState
           [void](Ensure-SessionReady('OnJoinedRoom'))
         }
+
         Notify-All ("self:" + $script:SessionId) $AppName 'You joined an instance.'
         continue
       }
