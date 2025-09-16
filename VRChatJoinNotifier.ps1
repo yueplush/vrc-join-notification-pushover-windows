@@ -33,9 +33,11 @@ $DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\Local
 # ---------------- Cooldown (anti-spam) ----------------
 $NotifyCooldownSeconds = 10
 $SessionFallbackGraceSeconds = 30 # allow quick OnJoinedRoom confirmations to reuse fallback session
+$SessionFallbackMaxContinuationSeconds = 4 # require OnJoinedRoom to arrive quickly after fallback joins to reuse
 $script:LastNotified = @{}
 $script:SessionId = 0         # increments on each detected session
 $script:SeenPlayers = @{}     # join key -> first seen time (per session)
+$script:SessionLastJoinAt = $null
 $script:SessionReady = $false # true once current session started
 $script:SessionSource = ''    # remember how the session started
 $script:SessionStartedAt = $null
@@ -73,6 +75,7 @@ function Reset-SessionState{
   $script:SessionSource = ''
   $script:SeenPlayers = @{}
   $script:SessionStartedAt = $null
+  $script:SessionLastJoinAt = $null
 }
 function Ensure-SessionReady([string]$Reason){
   if($script:SessionReady){ return $false }
@@ -82,6 +85,7 @@ function Ensure-SessionReady([string]$Reason){
   $script:SessionSource = $Reason
   $script:SeenPlayers = @{}
   $script:SessionStartedAt = Get-Date
+  $script:SessionLastJoinAt = $null
   Write-AppLog ("Session " + $script:SessionId + " started (" + $Reason + ").")
   return $true
 }
@@ -482,27 +486,76 @@ function Process-FollowOutput {
       if(-not (Is-VRChatRunning)) { continue }
 
       if($s.StartsWith('SELF_JOIN||')){
+        $now = Get-Date
         $reuseFallback = $false
         $elapsedSinceFallback = $null
+        $lastJoinGap = $null
+        $fallbackJoinCount = 0
+
         if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
+          $fallbackJoinCount = $script:SeenPlayers.Count
+
           if($script:SessionStartedAt){
-            try{ $elapsedSinceFallback = (Get-Date) - $script:SessionStartedAt }catch{ $elapsedSinceFallback = $null }
+            try{ $elapsedSinceFallback = $now - $script:SessionStartedAt }catch{ $elapsedSinceFallback = $null }
           }
 
-          if($null -ne $elapsedSinceFallback -and $elapsedSinceFallback.TotalSeconds -lt $SessionFallbackGraceSeconds){
+          if($fallbackJoinCount -gt 0){
+            $lastJoinAt = $script:SessionLastJoinAt
+            if(-not $lastJoinAt){
+              try{ $lastJoinAt = ($script:SeenPlayers.Values | Sort-Object -Descending | Select-Object -First 1) }catch{ $lastJoinAt = $null }
+            }
+            if($lastJoinAt){
+              try{ $lastJoinGap = $now - $lastJoinAt }catch{ $lastJoinGap = $null }
+            }
+          }
+
+          $withinGrace = ($null -ne $elapsedSinceFallback -and $elapsedSinceFallback.TotalSeconds -lt $SessionFallbackGraceSeconds)
+          $withinJoinGap = $false
+          if($withinGrace){
+            if($fallbackJoinCount -le 0){
+              $withinJoinGap = $true
+            }elseif($lastJoinGap){
+              $withinJoinGap = ($lastJoinGap.TotalSeconds -le $SessionFallbackMaxContinuationSeconds)
+            }
+          }
+
+          if($withinGrace -and $withinJoinGap){
             $reuseFallback = $true
             $script:SessionSource = 'OnJoinedRoom'
-            Write-AppLog ("Session " + $script:SessionId + " confirmed by OnJoinedRoom.")
+
+            $logParts = @()
+            if($lastJoinGap){
+              $gapSeconds = [Math]::Round([Math]::Max(0,$lastJoinGap.TotalSeconds),1)
+              $logParts += ("last join gap " + $gapSeconds + 's')
+            }elseif($fallbackJoinCount -gt 0){
+              $logParts += 'last join gap unknown'
+            }
+            if($fallbackJoinCount -gt 0){ $logParts += ("tracked players " + $fallbackJoinCount) }
+
+            $detail = ''
+            if($logParts.Count -gt 0){ $detail = ' (' + ($logParts -join '; ') + ')' }
+            Write-AppLog ("Session " + $script:SessionId + " confirmed by OnJoinedRoom." + $detail)
           }
         }
 
         if(-not $reuseFallback){
           if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
-            $detail = ''
+            $detailParts = @()
             if($null -ne $elapsedSinceFallback){
               $seconds = [Math]::Round([Math]::Max(0,$elapsedSinceFallback.TotalSeconds),1)
-              $detail = " after " + $seconds + 's'
+              $detailParts += ("after " + $seconds + 's')
             }
+            if($fallbackJoinCount -gt 0){
+              if($lastJoinGap){
+                $gapSeconds = [Math]::Round([Math]::Max(0,$lastJoinGap.TotalSeconds),1)
+                $detailParts += ("last join gap " + $gapSeconds + 's')
+              }else{
+                $detailParts += 'last join gap unavailable'
+              }
+              $detailParts += ("tracked players " + $fallbackJoinCount)
+            }
+            $detail = ''
+            if($detailParts.Count -gt 0){ $detail = ' (' + ($detailParts -join '; ') + ')' }
             Write-AppLog ("Session " + $script:SessionId + " fallback expired" + $detail + "; starting new session for OnJoinedRoom.")
           }
           Reset-SessionState
@@ -537,6 +590,9 @@ function Process-FollowOutput {
           if(-not [string]::IsNullOrWhiteSpace($tmpUser)){ $userId = $tmpUser }
         }
 
+        $eventTime = Get-Date
+        $script:SessionLastJoinAt = $eventTime
+
         $keyBase = if($userId){ $userId.ToLowerInvariant() } else { $name.ToLowerInvariant() }
         $hashSuffix = ''
         if(-not $userId -and -not [string]::IsNullOrWhiteSpace($rawLine)){
@@ -547,7 +603,7 @@ function Process-FollowOutput {
         if($hashSuffix){ $joinKey += ":" + $hashSuffix }
 
         if(-not $script:SeenPlayers.ContainsKey($joinKey)){
-          $script:SeenPlayers[$joinKey]=(Get-Date)
+          $script:SeenPlayers[$joinKey]=$eventTime
           $message = $name + ' joined your instance.'
           Notify-All $joinKey $AppName $message
 
