@@ -34,7 +34,7 @@ $DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\Local
 $NotifyCooldownSeconds = 10
 $script:LastNotified = @{}
 $script:SessionId = 0         # increments on each detected session
-$script:SeenPlayers = @{}     # name -> first seen time (per session)
+$script:SeenPlayers = @{}     # join key -> first seen time (per session)
 $script:SessionReady = $false # true once current session started
 $script:SessionSource = ''    # remember how the session started
 
@@ -98,6 +98,31 @@ function Write-AppLog($Message){
     $stamp=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     Add-Content -Path (Join-Path $global:Cfg.InstallDir $AppLogName) -Value ("[$stamp] " + $Message)
   }catch{}
+}
+function Normalize-JoinName([string]$Name){
+  if([string]::IsNullOrWhiteSpace($Name)){ return $null }
+  $clean = [regex]::Replace($Name,'[\u200B-\u200D\uFEFF]','')
+  $clean = $clean.Trim()
+  $clean = $clean -replace '\u3000',' '
+  $clean = $clean.Trim([char]34).Trim([char]39).Trim()
+  $clean = $clean -replace '\|\|','|'
+  if([string]::IsNullOrWhiteSpace($clean)){ return $null }
+  if($clean.Length -gt 160){ $clean = $clean.Substring(0,160).Trim() }
+  if($clean -match '^[\-:|–—]+$'){ return $null }
+  return $clean
+}
+function Get-ShortHash([string]$Text){
+  if([string]::IsNullOrEmpty($Text)){ return '' }
+  try{
+    $md5=[System.Security.Cryptography.MD5]::Create()
+    try{
+      $bytes=[System.Text.Encoding]::UTF8.GetBytes($Text)
+      $hash=$md5.ComputeHash($bytes)
+      return ($hash[0..3] | ForEach-Object { $_.ToString('x2') }) -join ''
+    }finally{
+      if($md5){ $md5.Dispose() }
+    }
+  }catch{ return '' }
 }
 function Is-VRChatRunning {
   try { @(Get-Process -Name 'VRChat' -ErrorAction SilentlyContinue).Count -gt 0 } catch { $false }
@@ -306,40 +331,64 @@ function Start-Follow{
       if(-not $files){ return $null }
       ($files | Sort-Object @{Expression={ Score-LogFile $_ } ; Descending=$true } | Select-Object -First 1).FullName
     }
-    function Get-JoinName([string]$line){
+    function Normalize-JoinFragment([string]$text){
+      if([string]::IsNullOrWhiteSpace($text)){ return $null }
+      $tmp = [regex]::Replace($text,'[\u200B-\u200D\uFEFF]','')
+      $tmp = $tmp.Trim()
+      $tmp = $tmp -replace '\u3000',' '
+      $tmp = $tmp.Trim([char]34).Trim([char]39).Trim()
+      $tmp = $tmp.TrimStart('-','—','–',':','|').Trim()
+      if([string]::IsNullOrWhiteSpace($tmp)){ return $null }
+      if($tmp.Length -gt 160){ $tmp = $tmp.Substring(0,160).Trim() }
+      if($tmp -match '^[\-:|–—]+$'){ return $null }
+      return $tmp
+    }
+    function Parse-JoinLine([string]$line){
       if([string]::IsNullOrWhiteSpace($line)){ return $null }
 
       $idx = $line.ToLowerInvariant().IndexOf('onplayerjoined')
       if($idx -lt 0){ return $null }
 
       $after = $line.Substring($idx + 'onplayerjoined'.Length)
+      $after = [regex]::Replace($after,'[\u200B-\u200D\uFEFF]','')
       $after = $after.Trim()
-      while($after.Length -gt 0 -and '-:–'.Contains($after[0])){ $after = $after.Substring(1).Trim() }
-      if([string]::IsNullOrWhiteSpace($after)){ return $null }
+      while($after.Length -gt 0 -and ':|-–—'.Contains($after[0])){ $after = $after.Substring(1).TrimStart() }
 
-      $m = [regex]::Match($after,'(?i)displayName\s*=\s*(?<name>[^,\]\)]+)')
-      if($m.Success){ return ($m.Groups['name'].Value.Trim().Trim([char]34).Trim([char]39)) }
+      $displayName = $null
+      $m = [regex]::Match($after,'(?i)displayName\s*[:=]\s*(?<name>[^,\]\)]+)')
+      if($m.Success){ $displayName = Normalize-JoinFragment $m.Groups['name'].Value }
 
-      $m = [regex]::Match($after,'(?i)\bname\s*[:=]\s*(?<name>[^,\]\)]+)')
-      if($m.Success){ return ($m.Groups['name'].Value.Trim().Trim([char]34).Trim([char]39)) }
-
-      $after = $after -replace '\s*\(usr_[^\)]*\)\s*$',''
-      $after = $after -replace '\s*\(userId[^\)]*\)\s*$',''
-
-      foreach($sep in @('  ',' - ',' -- ',' | ',' [',' {',' (','<','>')){
-        $pos = $after.IndexOf($sep)
-        if($pos -gt 0){
-          $after = $after.Substring(0,$pos)
-          break
-        }
+      if(-not $displayName){
+        $m = [regex]::Match($after,'(?i)\bname\s*[:=]\s*(?<name>[^,\]\)]+)')
+        if($m.Success){ $displayName = Normalize-JoinFragment $m.Groups['name'].Value }
       }
 
-      $after = $after.Trim().Trim([char]34).Trim([char]39)
-      if([string]::IsNullOrWhiteSpace($after)){ return $null }
-      if($after -match '^[\(\)\[\]\{\}\-:–]*$'){ return $null }
-      if($after.Length -gt 120){ $after = $after.Substring(0,120).Trim() }
-      $after = $after -replace '\|\|','|'
-      return $after
+      $userId = $null
+      $m = [regex]::Match($after,'(?i)\(usr_[^\)\s]+\)')
+      if($m.Success){ $userId = $m.Value.Trim('(',')').Trim() }
+      if(-not $userId){
+        $m = [regex]::Match($after,'(?i)userId\s*[:=]\s*(usr_[0-9a-f\-]+)')
+        if($m.Success){ $userId = $m.Groups[1].Value }
+      }
+
+      if(-not $displayName){
+        $tmp = $after
+        if($userId){
+          $tmp = $tmp -replace [regex]::Escape('(' + $userId + ')'), ''
+        }
+        $tmp = [regex]::Replace($tmp,'\(usr_[^\)]*\)','')
+        $tmp = [regex]::Replace($tmp,'\(userId[^\)]*\)','')
+        $tmp = [regex]::Replace($tmp,'\[[^\]]*\]','')
+        $tmp = [regex]::Replace($tmp,'\{[^\}]*\}','')
+        $tmp = [regex]::Replace($tmp,'<[^>]*>','')
+        $tmp = $tmp -replace '\|\|','|'
+        $displayName = Normalize-JoinFragment $tmp
+      }
+
+      if(-not $displayName -and $userId){ $displayName = $userId }
+      if(-not $displayName){ $displayName = 'Someone' }
+
+      return [pscustomobject]@{ Name=$displayName; UserId=$userId }
     }
 
     $reSelf = [regex]'(?i)\[Behaviour\].*OnJoinedRoom\b'
@@ -390,9 +439,17 @@ function Start-Follow{
             continue
           }
           if($reJoin.IsMatch($line)){
-            $name = Get-JoinName $line
+            $parsed = Parse-JoinLine $line
+            $name = 'Someone'
+            $userId = ''
+            if($parsed){
+              if($parsed.Name){ $name = $parsed.Name }
+              if($parsed.UserId){ $userId = $parsed.UserId }
+            }
             if([string]::IsNullOrWhiteSpace($name)){ $name='Someone' }
-            Write-Output ("PLAYER_JOIN||" + $name + "||" + $line)
+            $safeName = ($name -replace '\|\|','|')
+            $safeUser = ($userId -replace '\|\|','|')
+            Write-Output ("PLAYER_JOIN||" + $safeName + "||" + $safeUser + "||" + $line)
             continue
           }
         }
@@ -435,13 +492,48 @@ function Process-FollowOutput {
       if($s.StartsWith('PLAYER_JOIN||')){
         if(-not $script:SessionReady){ [void](Ensure-SessionReady('OnPlayerJoined fallback')) }
         if(-not $script:SessionReady){ continue }
-        $parts=$s.Split('||',3)
-        $name = 'Someone'
-        if($parts.Length -ge 2 -and $parts[1]){ $name = $parts[1] }
-        if(-not $script:SeenPlayers.ContainsKey($name)){
-          $script:SeenPlayers[$name]=(Get-Date)
-          Notify-All ("join:" + $script:SessionId + ":" + $name) $AppName ($name + " joined your instance.")
-          Write-AppLog ("Session " + $script:SessionId + ": player joined '" + $name + "'.")
+        $parts=$s.Split('||',4)
+        $rawName = ''
+        $rawUserId = ''
+        $rawLine = ''
+        if($parts.Length -ge 2){ $rawName = $parts[1] }
+        if($parts.Length -ge 4){
+          $rawUserId = $parts[2]
+          $rawLine = $parts[3]
+        }elseif($parts.Length -ge 3){
+          $rawLine = $parts[2]
+        }
+
+        $name = Normalize-JoinName $rawName
+        if(-not $name){ $name = 'Someone' }
+
+        $userId = $null
+        if(-not [string]::IsNullOrWhiteSpace($rawUserId)){
+          $tmpUser = [regex]::Replace($rawUserId,'[\u200B-\u200D\uFEFF]','').Trim()
+          if(-not [string]::IsNullOrWhiteSpace($tmpUser)){ $userId = $tmpUser }
+        }
+
+        $keyBase = if($userId){ $userId.ToLowerInvariant() } else { $name.ToLowerInvariant() }
+        $hashSuffix = ''
+        if(-not $userId -and -not [string]::IsNullOrWhiteSpace($rawLine)){
+          $hashSuffix = Get-ShortHash $rawLine
+        }
+
+        $joinKey = "join:{0}:{1}" -f $script:SessionId,$keyBase
+        if($hashSuffix){ $joinKey += ":" + $hashSuffix }
+
+        if(-not $script:SeenPlayers.ContainsKey($joinKey)){
+          $script:SeenPlayers[$joinKey]=(Get-Date)
+          $message = $name + ' joined your instance.'
+          Notify-All $joinKey $AppName $message
+
+          $logLine = "Session {0}: player joined '{1}'" -f $script:SessionId,$name
+          if($userId){ $logLine += " (" + $userId + ")" }
+          $logLine += '.'
+          Write-AppLog $logLine
+          if($name -eq 'Someone' -and -not [string]::IsNullOrWhiteSpace($rawLine)){
+            Write-AppLog ("Join parse fallback for line: " + $rawLine)
+          }
         }
         continue
       }
