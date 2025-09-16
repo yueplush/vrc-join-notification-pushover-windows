@@ -259,6 +259,10 @@ function Start-Follow{
   $global:FollowJob = Start-Job -ScriptBlock {
     param($InitialLogPath,$LogDir)
 
+    function Normalize-LogPath([string]$path){
+      if([string]::IsNullOrWhiteSpace($path)){ return $null }
+      try{ return [System.IO.Path]::GetFullPath($path) }catch{ return $path }
+    }
     function Score-LogFile([System.IO.FileInfo]$f){
       $a = $f.LastWriteTimeUtc
       $b = $f.CreationTimeUtc
@@ -283,26 +287,79 @@ function Start-Follow{
       if(-not $files){ return $null }
       ($files | Sort-Object @{Expression={ Score-LogFile $_ } ; Descending=$true } | Select-Object -First 1).FullName
     }
+    function Get-JoinName([string]$line){
+      if([string]::IsNullOrWhiteSpace($line)){ return $null }
 
-    $reSelf = [regex]'(?i)^\s*\[Behaviour\]\s*OnJoinedRoom\b'
-    $reJoin = [regex]'(?i)^\s*\[Behaviour\]\s*OnPlayerJoined(?:\s*[:\-]?\s*(?<name>.+))?$'
+      $idx = $line.ToLowerInvariant().IndexOf('onplayerjoined')
+      if($idx -lt 0){ return $null }
 
-    $logPath = $InitialLogPath
-    $lastSize=(Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue).Length
-    if(-not $lastSize){ $lastSize=0L }
+      $after = $line.Substring($idx + 'onplayerjoined'.Length)
+      $after = $after.Trim()
+      while($after.Length -gt 0 -and '-:–'.Contains($after[0])){ $after = $after.Substring(1).Trim() }
+      if([string]::IsNullOrWhiteSpace($after)){ return $null }
+
+      $m = [regex]::Match($after,'(?i)displayName\s*=\s*(?<name>[^,\]\)]+)')
+      if($m.Success){ return ($m.Groups['name'].Value.Trim().Trim([char]34).Trim([char]39)) }
+
+      $m = [regex]::Match($after,'(?i)\bname\s*[:=]\s*(?<name>[^,\]\)]+)')
+      if($m.Success){ return ($m.Groups['name'].Value.Trim().Trim([char]34).Trim([char]39)) }
+
+      $after = $after -replace '\s*\(usr_[^\)]*\)\s*$',''
+      $after = $after -replace '\s*\(userId[^\)]*\)\s*$',''
+
+      foreach($sep in @('  ',' - ',' -- ',' | ',' [',' {',' (','<','>')){
+        $pos = $after.IndexOf($sep)
+        if($pos -gt 0){
+          $after = $after.Substring(0,$pos)
+          break
+        }
+      }
+
+      $after = $after.Trim().Trim([char]34).Trim([char]39)
+      if([string]::IsNullOrWhiteSpace($after)){ return $null }
+      if($after -match '^[\(\)\[\]\{\}\-:–]*$'){ return $null }
+      if($after.Length -gt 120){ $after = $after.Substring(0,120).Trim() }
+      $after = $after -replace '\|\|','|'
+      return $after
+    }
+
+    $reSelf = [regex]'(?i)\[Behaviour\].*OnJoinedRoom\b'
+    $reJoin = [regex]'(?i)\[Behaviour\].*OnPlayerJoined\b'
+
+    $logPath = Normalize-LogPath $InitialLogPath
+    $lastSize = 0L
+    if($logPath){
+      $info = Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue
+      if($info){ $lastSize = $info.Length } else { $lastSize = 0L }
+    }
 
     while($true){
       $maybe = Get-Newest $LogDir
-      if($maybe -and $maybe -ne $logPath){
-        $logPath = $maybe
-        $lastSize=(Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue).Length
-        if(-not $lastSize){ $lastSize=0L }
-        Write-Output ("SWITCHED||" + $logPath)
+      if($maybe){
+        $maybe = Normalize-LogPath $maybe
+        $isSame = $false
+        if($maybe -and $logPath){
+          $isSame = [string]::Equals($maybe,$logPath,[System.StringComparison]::OrdinalIgnoreCase)
+        }
+        if(-not $isSame){
+          $logPath = $maybe
+          $info = $null
+          if($logPath){ $info = Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue }
+          if($info){ $lastSize = $info.Length } else { $lastSize = 0L }
+          if($logPath){ Write-Output ("SWITCHED||" + $logPath) }
+          Start-Sleep -Milliseconds 200
+          continue
+        }
       }
 
-      if(-not(Test-Path $logPath)){ Start-Sleep -Milliseconds 800; continue }
+      if(-not $logPath -or -not(Test-Path $logPath)){ Start-Sleep -Milliseconds 800; continue }
 
-      $fs=[System.IO.File]::Open($logPath,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::ReadWrite)
+      $info = Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue
+      if(-not $info){ Start-Sleep -Milliseconds 800; continue }
+
+      if($info.Length -lt $lastSize){ $lastSize = 0L }
+
+      $fs=[System.IO.File]::Open($info.FullName,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::ReadWrite)
       try{
         $sr=New-Object System.IO.StreamReader($fs)
         $fs.Seek($lastSize,[System.IO.SeekOrigin]::Begin) | Out-Null
@@ -313,10 +370,9 @@ function Start-Follow{
             Write-Output ("SELF_JOIN||" + $line)
             continue
           }
-          $m=$reJoin.Match($line)
-          if($m.Success){
-            $name=$m.Groups['name'].Value.Trim()
-            if(-not $name){ $name='Someone' }
+          if($reJoin.IsMatch($line)){
+            $name = Get-JoinName $line
+            if([string]::IsNullOrWhiteSpace($name)){ $name='Someone' }
             Write-Output ("PLAYER_JOIN||" + $name + "||" + $line)
             continue
           }
@@ -331,7 +387,8 @@ function Start-Follow{
 function Process-FollowOutput {
   if (-not $global:FollowJob) { return }
   try{
-    $out = Receive-Job -Id $global:FollowJob.Id -Keep -ErrorAction SilentlyContinue
+    $out = Receive-Job -Id $global:FollowJob.Id -ErrorAction SilentlyContinue
+    if(-not $out){ return }
     foreach($s in $out){
       if($s -isnot [string]){ continue }
 
