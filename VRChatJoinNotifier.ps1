@@ -32,11 +32,14 @@ $DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\Local
 
 # ---------------- Cooldown (anti-spam) ----------------
 $NotifyCooldownSeconds = 10
+$SessionFallbackGraceSeconds = 30 # allow quick OnJoinedRoom confirmations to adopt fallback players
 $script:LastNotified = @{}
 $script:SessionId = 0         # increments on each detected session
 $script:SeenPlayers = @{}     # join key -> first seen time (per session)
 $script:SessionReady = $false # true once current session started
 $script:SessionSource = ''    # remember how the session started
+$script:SessionStartedAt = $null
+$script:LastLeftRoomAt = $null
 
 # ---------------- Globals ----------------
 $global:Cfg = $null
@@ -70,6 +73,7 @@ function Reset-SessionState{
   $script:SessionReady = $false
   $script:SessionSource = ''
   $script:SeenPlayers = @{}
+  $script:SessionStartedAt = $null
 }
 function Ensure-SessionReady([string]$Reason){
   if($script:SessionReady){ return $false }
@@ -78,6 +82,7 @@ function Ensure-SessionReady([string]$Reason){
   $script:SessionReady = $true
   $script:SessionSource = $Reason
   $script:SeenPlayers = @{}
+  $script:SessionStartedAt = Get-Date
   Write-AppLog ("Session " + $script:SessionId + " started (" + $Reason + ").")
   return $true
 }
@@ -393,6 +398,7 @@ function Start-Follow{
 
     $reSelf = [regex]'(?i)\[Behaviour\].*OnJoinedRoom\b'
     $reJoin = [regex]'(?i)\[Behaviour\].*OnPlayerJoined\b'
+    $reLeft = [regex]'(?i)\[Behaviour\].*OnLeftRoom\b'
 
     $logPath = Normalize-LogPath $InitialLogPath
     $lastSize = 0L
@@ -433,6 +439,11 @@ function Start-Follow{
         $fs.Seek($lastSize,[System.IO.SeekOrigin]::Begin) | Out-Null
         while(-not $sr.EndOfStream){
           $line=$sr.ReadLine()
+
+          if($reLeft.IsMatch($line)){
+            Write-Output ("LEFT_ROOM||" + $line)
+            continue
+          }
 
           if($reSelf.IsMatch($line)){
             Write-Output ("SELF_JOIN||" + $line)
@@ -475,16 +486,85 @@ function Process-FollowOutput {
         continue
       }
 
+      if($s.StartsWith('LEFT_ROOM||')){
+        $script:LastLeftRoomAt = Get-Date
+        if($script:SessionReady){
+          Write-AppLog ("Session " + $script:SessionId + " ended by OnLeftRoom.")
+        } else {
+          Write-AppLog "OnLeftRoom observed without active session."
+        }
+        Reset-SessionState
+        continue
+      }
+
       if(-not (Is-VRChatRunning)) { continue }
 
       if($s.StartsWith('SELF_JOIN||')){
-        if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
-          $script:SessionSource = 'OnJoinedRoom'
-          Write-AppLog ("Session " + $script:SessionId + " confirmed by OnJoinedRoom.")
-        } else {
-          Reset-SessionState
-          [void](Ensure-SessionReady('OnJoinedRoom'))
+        $previousSource = $script:SessionSource
+        $previousSessionId = $script:SessionId
+        $fallbackAgeSeconds = $null
+        $leftAfterFallback = $false
+        $carryEntries = @()
+        $shouldCarry = $false
+
+        if($script:SessionReady -and ($previousSource -eq 'OnPlayerJoined fallback')){
+          if($script:SessionStartedAt){
+            try{ $fallbackAgeSeconds = ((Get-Date) - $script:SessionStartedAt).TotalSeconds }catch{ $fallbackAgeSeconds = $null }
+          }
+
+          if($script:LastLeftRoomAt){
+            if($script:SessionStartedAt){
+              try{
+                if($script:LastLeftRoomAt -ge $script:SessionStartedAt){ $leftAfterFallback = $true }
+              }catch{ $leftAfterFallback = $true }
+            } else {
+              $leftAfterFallback = $true
+            }
+          }
+
+          if(-not $leftAfterFallback){
+            $prefix = "join:" + $previousSessionId + ":"
+            foreach($joinKey in @($script:SeenPlayers.Keys)){
+              if($joinKey -is [string] -and $joinKey.StartsWith($prefix)){
+                $suffix = $joinKey.Substring($prefix.Length)
+                $carryEntries += [pscustomobject]@{ Suffix = $suffix; SeenAt = $script:SeenPlayers[$joinKey] }
+              }
+            }
+
+            if($carryEntries.Count -gt 0){
+              $shouldCarry = $true
+              if($null -ne $fallbackAgeSeconds -and $fallbackAgeSeconds -gt $SessionFallbackGraceSeconds){
+                $shouldCarry = $false
+              }
+            }
+          }
         }
+
+        Reset-SessionState
+        if(-not (Ensure-SessionReady('OnJoinedRoom'))){ continue }
+
+        if($shouldCarry){
+          foreach($entry in $carryEntries){
+            $suffix = $entry.Suffix
+            if($null -eq $suffix){ $suffix = '' }
+            $newKey = "join:{0}:{1}" -f $script:SessionId,$suffix
+            $script:SeenPlayers[$newKey] = $entry.SeenAt
+          }
+          Write-AppLog ("Session " + $script:SessionId + " imported " + $carryEntries.Count + " fallback join(s).")
+        }elseif($previousSource -eq 'OnPlayerJoined fallback'){
+          $msg = "Fallback session restarted by OnJoinedRoom"
+          if($leftAfterFallback){
+            $msg += '; discarded due to OnLeftRoom.'
+          }elseif($null -ne $fallbackAgeSeconds){
+            $age = [Math]::Round([Math]::Max(0,$fallbackAgeSeconds),1)
+            $msg += (" after " + $age + 's.')
+          }else{
+            $msg += '.'
+          }
+          Write-AppLog $msg
+        }
+
+        $script:LastLeftRoomAt = $null
         Notify-All ("self:" + $script:SessionId) $AppName 'You joined an instance.'
         continue
       }
