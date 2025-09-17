@@ -118,6 +118,11 @@ pip install '.[tray]'
 > [!TIP]
 > The activation script above targets Bourne-style shells such as Bash or Zsh.
 > If you use fish, run `source .venv/bin/activate.fish` instead.
+>```bash
+> python3 -m venv .venv
+> source .venv/bin/activate.fish
+> pip install '.[tray]'
+>```
 
 If you prefer to keep the app isolated from your system Python, `pipx` works out of the box:
 
