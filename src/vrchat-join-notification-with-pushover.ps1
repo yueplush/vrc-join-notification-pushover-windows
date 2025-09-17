@@ -1441,7 +1441,7 @@ function Build-UI {
         param([System.Windows.Forms.TableLayoutPanel]$Table, [string]$LabelText)
         $row = $Table.RowCount
         $Table.RowCount++
-        $Table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+        [void]$Table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
         $label = New-Object System.Windows.Forms.Label
         $label.Text = $LabelText
         $label.AutoSize = $true
