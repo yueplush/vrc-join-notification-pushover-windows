@@ -160,7 +160,7 @@ The GUI opens automatically on the first launch. Configure the following:
 
 Use the **Add to Startup** / **Remove from Startup** buttons if you want the app to manage your desktop login entry automatically.
 
-Click **Save & Restart Monitoring** to begin watching the log file. Settings persist in `config.json` within the chosen install folder. A pointer file (`config-location.txt`) keeps track of custom locations, so you can move the data directory without losing preferences.
+Click **Save & Restart Monitoring** to begin watching the log file. Settings persist in `config.json` within the chosen install folder. A pointer file (`config-location.txt`) keeps track of custom locations, so you can move the data directory without losing preferences. If you simply click **Save** while valid Pushover keys are configured, the Linux build also confirms the change with a desktop notification.
 
 When the tray extras are installed **and** a tray manager is available, the notifier adds a tray icon with quick actions to open the settings window, start/stop monitoring, and exit. Closing the main window simply hides it, allowing the app to continue monitoring in the background. If the environment is missing tray support (no `pystray`/`Pillow` extras or no system tray manager), the app logs the reason, leaves the tray disabled, and you can continue operating it from the main window instead.
 

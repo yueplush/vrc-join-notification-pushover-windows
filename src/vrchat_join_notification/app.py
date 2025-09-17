@@ -1354,6 +1354,8 @@ class AppController:
 
     def save_only(self) -> None:
         self._save_config()
+        if self.config.pushover_user and self.config.pushover_token:
+            self.notifier.send(APP_NAME, "Settings saved.")
         self.status_var.set("Settings saved.")
 
     def _save_config(self) -> None:
