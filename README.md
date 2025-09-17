@@ -21,18 +21,19 @@ Windows users get a familiar PowerShell experience, while Linux users can instal
 
 ---
 
-## Windows quick start (PowerShell)
+## basic action (Powershell/bash)
+A. Clone the repository:
+   ```powershell/bash
+   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+   cd vrchat-join-notification-with-pushover
+   ```
 
+## Windows quick start (PowerShell)
 1. Install the `ps2exe` module if you plan to build a standalone executable:
    ```powershell
    Install-Module -Name ps2exe -Scope CurrentUser
    ```
-2. Clone the repository:
-   ```powershell
-   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   cd vrchat-join-notification-with-pushover
-   ```
-3. Run the script directly:
+2. Run the script directly:
    ```powershell
    .\src\vrchat-join-notification-with-pushover.ps1
    ```
@@ -41,7 +42,7 @@ Windows users get a familiar PowerShell experience, while Linux users can instal
    Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
      -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
    ```
-4. Use the tray icon to open **Settings**, configure your VRChat log directory and (optionally) Pushover credentials, then start monitoring.
+3. Use the tray icon to open **Settings**, configure your VRChat log directory and (optionally) Pushover credentials, then start monitoring.
 
 ---
 
