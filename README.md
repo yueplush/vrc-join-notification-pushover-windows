@@ -29,6 +29,8 @@ git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
 cd vrchat-join-notification-with-pushover
 ```
 
+---
+
 ## Windows quick start (PowerShell)
 
 1. Install the `ps2exe` module if you plan to build a standalone executable:
