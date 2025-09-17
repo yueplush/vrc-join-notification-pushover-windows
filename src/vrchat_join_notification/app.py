@@ -781,14 +781,17 @@ class SessionTracker:
         self.logger.log(message)
         return True
 
-    def notify_all(self, key: str, title: str, message: str) -> None:
+    def notify_all(
+        self, key: str, title: str, message: str, *, desktop: bool = True
+    ) -> None:
         now = datetime.utcnow()
         previous = self.last_notified.get(key)
         if previous and (now - previous) < timedelta(seconds=NOTIFY_COOLDOWN_SECONDS):
             self.logger.log(f"Suppressed '{key}' within cooldown.")
             return
         self.last_notified[key] = now
-        self.notifier.send(title, message)
+        if desktop:
+            self.notifier.send(title, message)
         self.pushover.send(title, message)
 
     def handle_log_switch(self, path: str) -> None:
@@ -1016,8 +1019,13 @@ class SessionTracker:
             message_name = f"{cleaned_name}({placeholder_for_message})"
         else:
             message_name = placeholder_for_message
+        desktop_notification = True
+        if was_placeholder and not cleaned_user:
+            placeholder_lower = (placeholder_for_message or "").strip().lower()
+            if placeholder_lower == "a player":
+                desktop_notification = False
         message = f"{message_name} joined your instance."
-        self.notify_all(join_key, APP_NAME, message)
+        self.notify_all(join_key, APP_NAME, message, desktop=desktop_notification)
         log_line = f"Session {self.session_id}: player joined '{cleaned_name}'"
         if cleaned_user:
             log_line += f" ({cleaned_user})"

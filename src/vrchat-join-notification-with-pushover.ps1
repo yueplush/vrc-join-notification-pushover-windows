@@ -245,7 +245,13 @@ function Show-Notification($Title,$Body){
   $global:TrayIcon.BalloonTipText =$Body
   $global:TrayIcon.ShowBalloonTip(4000)
 }
-function Notify-All($key,$title,$body){
+function Notify-All{
+  param(
+    $key,
+    $title,
+    $body,
+    [bool]$Desktop = $true
+  )
   $now=Get-Date
   if($script:LastNotified.ContainsKey($key)){
     if(($now - $script:LastNotified[$key]).TotalSeconds -lt $NotifyCooldownSeconds){
@@ -253,7 +259,7 @@ function Notify-All($key,$title,$body){
     }
   }
   $script:LastNotified[$key]=$now
-  Show-Notification $title $body
+  if($Desktop){ Show-Notification $title $body }
   Send-Pushover $title $body
 }
 
@@ -1011,8 +1017,16 @@ function Process-FollowOutput {
           $messageName = $name
           if([string]::IsNullOrWhiteSpace($messageName)){ $messageName = $placeholderForMessage }
           else{ $messageName = $messageName + '(' + $placeholderForMessage + ')' }
+          $desktopNotification = $true
+          if($wasPlaceholder -and [string]::IsNullOrWhiteSpace($userId)){
+            $placeholderLower = ''
+            if(-not [string]::IsNullOrWhiteSpace($placeholderForMessage)){
+              $placeholderLower = $placeholderForMessage.Trim().ToLowerInvariant()
+            }
+            if($placeholderLower -eq 'a player'){ $desktopNotification = $false }
+          }
           $message = $messageName + ' joined your instance.'
-          Notify-All $joinKey $AppName $message
+          Notify-All $joinKey $AppName $message $desktopNotification
 
           $logLine = "Session {0}: player joined '{1}'" -f $script:SessionId,$name
           if($userId){ $logLine += " (" + $userId + ")" }
