@@ -22,7 +22,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ---------------- App constants ----------------
-$AppName        = 'VRChat Join Notifier'
+$AppName        = 'System Notification'
 $ConfigFileName = 'config.json'
 $AppLogName     = 'notifier.log'
 $POUrl          = 'https://api.pushover.net/1/messages.json'
