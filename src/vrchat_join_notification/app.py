@@ -189,9 +189,11 @@ class AppConfig:
         payload = {
             "InstallDir": self.install_dir,
             "VRChatLogDir": self.vrchat_log_dir,
-            "PushoverUser": self.pushover_user,
-            "PushoverToken": self.pushover_token,
         }
+        if self.pushover_user:
+            payload["PushoverUser"] = self.pushover_user
+        if self.pushover_token:
+            payload["PushoverToken"] = self.pushover_token
         with open(self.config_path(), "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, ensure_ascii=False)
         self._write_pointer()
@@ -1393,16 +1395,27 @@ class AppController:
         self.status_var.set("Settings saved.")
 
     def _save_config(self) -> None:
+        previous_user = self.config.pushover_user
+        previous_token = self.config.pushover_token
         self.config.install_dir = _expand_path(self.install_var.get())
         self.config.vrchat_log_dir = _expand_path(self.log_dir_var.get())
         self.config.pushover_user = self.user_var.get().strip()
         self.config.pushover_token = self.token_var.get().strip()
+        removed_messages = []
+        if previous_user and not self.config.pushover_user:
+            removed_messages.append("Elegantly removed the Pushover user key.")
+        if previous_token and not self.config.pushover_token:
+            removed_messages.append("Elegantly removed the Pushover API token.")
         try:
             self.config.save()
             self.logger.log("Settings saved.")
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Failed to save settings:\n{exc}")
             self.logger.log(f"Failed to save settings: {exc}")
+        else:
+            for message in removed_messages:
+                self.logger.log(message)
+                self.notifier.send(APP_NAME, message)
 
     def start_monitoring(self) -> None:
         self.stop_monitoring()
