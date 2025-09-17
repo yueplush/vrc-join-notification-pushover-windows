@@ -188,7 +188,7 @@ The `Exec` line assumes `vrchat-join-notifier` is on your `$PATH` (which is the 
 
 After saving the file, log out and back in (or reboot) and your session will automatically start the notifier. You can remove the autostart entry at any time by deleting the `.desktop` file.
 
-### Uninstalling on Linux
+# Uninstalling on Linux
 
 Remove the Python package with the same tool you used to install it:
 
