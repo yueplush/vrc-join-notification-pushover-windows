@@ -474,6 +474,14 @@ function Start-Follow{
 
       $lower = $clean.ToLowerInvariant()
 
+      $jpRoomKey = -join @([char]0x30EB,[char]0x30FC,[char]0x30E0)
+      $jpInstanceKey = -join @([char]0x30A4,[char]0x30F3,[char]0x30B9,[char]0x30BF,[char]0x30F3,[char]0x30B9)
+      $jpJoinTerm = -join @([char]0x53C2,[char]0x52A0)
+      $jpCreateTerm = -join @([char]0x4F5C,[char]0x6210)
+      $jpEnterRoomTerm = -join @([char]0x5165,[char]0x5BA4)
+      $jpMoveTerm = -join @([char]0x79FB,[char]0x52D5)
+      $jpEnterHallTerm = -join @([char]0x5165,[char]0x5834)
+
       $indicators = @(
         'joining or creating room',
         'entering room',
@@ -499,8 +507,8 @@ function Start-Follow{
 
       if(-not $matched){
         $jpSets = @(
-          @{ Key='ルーム'; Terms=@('参加','作成','入室','移動','入場') },
-          @{ Key='インスタンス'; Terms=@('参加','作成','入室','移動','入場') }
+          @{ Key=$jpRoomKey; Terms=@($jpJoinTerm,$jpCreateTerm,$jpEnterRoomTerm,$jpMoveTerm,$jpEnterHallTerm) },
+          @{ Key=$jpInstanceKey; Terms=@($jpJoinTerm,$jpCreateTerm,$jpEnterRoomTerm,$jpMoveTerm,$jpEnterHallTerm) }
         )
         foreach($set in $jpSets){
           if($clean.Contains($set.Key)){
@@ -517,7 +525,9 @@ function Start-Follow{
 
       if(-not $matched){
         if($clean -match '(?i)\bwrld_[0-9a-f\-]+\b'){
-          if($lower.Contains('room') -or $lower.Contains('instance') -or $clean.Contains('インスタンス') -or $clean.Contains('ルーム')){
+          $hasJapaneseRoomWord = $clean.Contains($jpRoomKey) -or $clean.Contains($jpInstanceKey)
+
+          if($lower.Contains('room') -or $lower.Contains('instance') -or $hasJapaneseRoomWord){
             $matched = $true
           }
         }
@@ -1131,7 +1141,7 @@ function Show-SettingsForm{
   $txtInstall.Text=$global:Cfg.InstallDir
 
   $btnBrowseInstall=New-Object System.Windows.Forms.Button
-  $btnBrowseInstall.Text='Browse…'
+  $btnBrowseInstall.Text='Browse...'
   $btnBrowseInstall.Location=New-Object System.Drawing.Point(624,30)
   $btnBrowseInstall.Size=New-Object System.Drawing.Size(110,28)
   $btnBrowseInstall.Add_Click({ param($sender,$e)
@@ -1150,7 +1160,7 @@ function Show-SettingsForm{
   $txtVR.Text=$global:Cfg.VRChatLogDir
 
   $btnBrowseVR=New-Object System.Windows.Forms.Button
-  $btnBrowseVR.Text='Browse…'
+  $btnBrowseVR.Text='Browse...'
   $btnBrowseVR.Location=New-Object System.Drawing.Point(624,90)
   $btnBrowseVR.Size=New-Object System.Drawing.Size(110,28)
   $btnBrowseVR.Add_Click({ param($sender,$e)
@@ -1309,7 +1319,7 @@ function Init-Tray{
   $menu.Items.Add('Settings...').Add_Click({ param($s,$e) Show-SettingsForm }) | Out-Null
   $menu.Items.Add('Restart Monitoring').Add_Click({ param($s,$e)
       Start-Follow
-      Start-TrayPulse -Message 'Restarting monitor…' -Seconds 2.5 -IntervalMs 150
+      Start-TrayPulse -Message 'Restarting monitor...' -Seconds 2.5 -IntervalMs 150
       Show-Notification $AppName 'Monitoring restarted.'
     }) | Out-Null
   [void]$menu.Items.Add('-')
@@ -1331,7 +1341,7 @@ function Init-Tray{
 
 function Start-TrayPulse{
   param(
-    [string]$Message = 'Working…',
+    [string]$Message = 'Working...',
     [double]$Seconds = 2.0,
     [int]$IntervalMs = 120
   )
