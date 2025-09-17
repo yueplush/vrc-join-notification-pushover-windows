@@ -20,7 +20,7 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 
 ---
 
-## Getting the source (PowerShell/Bash)
+# Getting the source (PowerShell/Bash)
 
 Clone the repository and enter it:
 
