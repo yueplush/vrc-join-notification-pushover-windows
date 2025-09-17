@@ -35,9 +35,10 @@ cd vrchat-join-notification-with-pushover/src/
 ```
 
 ```powershell
-# Convert to an EXE (requires ps2exe)
-Invoke-ps2exe .\vrchat-join-notification-with-pushover.ps1 .\vrchat-join-notification-with-pushover.exe `
-  -NoConsole -Title "VRChat Join Notification with Pushover" -Icon .\notification.ico
+<# Build to EXE (Windows PowerShell)
+Install-Module ps2exe -Scope CurrentUser -Force
+Invoke-ps2exe -InputFile .\VRChatJoinNotifier.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
+  -Title 'VRChat Join Notifier' -IconFile .\notification.ico -NoConsole -STA -x64
 ```
 
 Run the script (or compiled EXE) and use the tray icon to open the settings
