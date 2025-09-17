@@ -27,6 +27,12 @@ $ConfigFileName = 'config.json'
 $AppLogName     = 'notifier.log'
 $POUrl          = 'https://api.pushover.net/1/messages.json'
 
+$EnDash = [char]0x2013
+$EmDash = [char]0x2014
+$JoinSeparatorChars = [char[]]@('-',':','|',$EnDash,$EmDash)
+$JoinSeparatorString = -join $JoinSeparatorChars
+$JoinSeparatorOnlyPattern = '^[\-:|\u2013\u2014]+$'
+
 $DefaultInstallDir   = Join-Path $env:LOCALAPPDATA 'VRChatJoinNotificationWithPushover'
 $DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\LocalLow') 'VRChat\VRChat'
 
@@ -109,7 +115,7 @@ function Ensure-SessionReady([string]$Reason){
 
   if($global:TrayIcon){
     $tip = $AppName
-    if($roomDesc){ $tip = $AppName + " — " + $roomDesc }
+    if($roomDesc){ $tip = "$AppName $EmDash $roomDesc" }
     $global:IdleTooltip = $tip
     try{ $global:TrayIcon.Text = $tip }catch{}
   }
@@ -142,7 +148,7 @@ function Normalize-JoinName([string]$Name){
   $clean = $clean -replace '\|\|','|'
   if([string]::IsNullOrWhiteSpace($clean)){ return $null }
   if($clean.Length -gt 160){ $clean = $clean.Substring(0,160).Trim() }
-  if($clean -match '^[\-:|–—]+$'){ return $null }
+  if($clean -match $JoinSeparatorOnlyPattern){ return $null }
   return $clean
 }
 function Is-PlaceholderName([string]$Name){
@@ -348,6 +354,12 @@ function Start-Follow{
   $global:FollowJob = Start-Job -ScriptBlock {
     param($InitialLogPath,$LogDir)
 
+    $EmDash = [char]0x2014
+    $EnDash = [char]0x2013
+    $JoinSeparatorChars = [char[]]@('-',':','|',$EnDash,$EmDash)
+    $JoinSeparatorString = -join $JoinSeparatorChars
+    $JoinSeparatorOnlyPattern = '^[\-:|\u2013\u2014]+$'
+
     function Normalize-LogPath([string]$path){
       if([string]::IsNullOrWhiteSpace($path)){ return $null }
       try{ return [System.IO.Path]::GetFullPath($path) }catch{ return $path }
@@ -382,10 +394,10 @@ function Start-Follow{
       $tmp = $tmp.Trim()
       $tmp = $tmp -replace '\u3000',' '
       $tmp = $tmp.Trim([char]34).Trim([char]39).Trim()
-      $tmp = $tmp.TrimStart('-','—','–',':','|').Trim()
+      $tmp = $tmp.TrimStart($JoinSeparatorChars).Trim()
       if([string]::IsNullOrWhiteSpace($tmp)){ return $null }
       if($tmp.Length -gt 160){ $tmp = $tmp.Substring(0,160).Trim() }
-      if($tmp -match '^[\-:|–—]+$'){ return $null }
+      if($tmp -match $JoinSeparatorOnlyPattern){ return $null }
       return $tmp
     }
     function Parse-PlayerEventLine([string]$line,[string]$eventToken = 'OnPlayerJoined'){
@@ -403,7 +415,7 @@ function Start-Follow{
       $after = $line.Substring($idx + $needle.Length)
       $after = [regex]::Replace($after,'[\u200B-\u200D\uFEFF]','')
       $after = $after.Trim()
-      while($after.Length -gt 0 -and ':|-–—'.Contains($after[0])){ $after = $after.Substring(1).TrimStart() }
+      while($after.Length -gt 0 -and $JoinSeparatorString.Contains($after[0])){ $after = $after.Substring(1).TrimStart() }
 
       $placeholder = $null
       if(-not [string]::IsNullOrWhiteSpace($after)){
@@ -707,7 +719,7 @@ function Process-FollowOutput {
           }
           if($global:TrayIcon){
             $tip = $AppName
-            if($roomDesc){ $tip = $AppName + " — " + $roomDesc }
+            if($roomDesc){ $tip = "$AppName $EmDash $roomDesc" }
             $global:IdleTooltip = $tip
             try{ $global:TrayIcon.Text = $tip }catch{}
           }
@@ -1331,7 +1343,7 @@ function Start-TrayPulse{
     $global:PulseTimer=$null
   }
 
-  $global:TrayIcon.Text = $AppName + " — " + $Message
+  $global:TrayIcon.Text = "$AppName $EmDash $Message"
   $global:PulseStopAt = (Get-Date).AddSeconds($Seconds)
   $global:PulseFrame = $false
 
