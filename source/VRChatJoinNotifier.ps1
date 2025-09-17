@@ -27,7 +27,7 @@ $ConfigFileName = 'config.json'
 $AppLogName     = 'notifier.log'
 $POUrl          = 'https://api.pushover.net/1/messages.json'
 
-$DefaultInstallDir   = Join-Path $env:LOCALAPPDATA 'VRChatJoinNotifier'
+$DefaultInstallDir   = Join-Path $env:LOCALAPPDATA 'VRChatJoinNotificationWithPushover'
 $DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\LocalLow') 'VRChat\VRChat'
 
 # ---------------- Cooldown (anti-spam) ----------------
@@ -929,7 +929,7 @@ function Show-SettingsForm{
   }
 
   $form=New-Object System.Windows.Forms.Form
-  $form.Text="$AppName – Settings"
+  $form.Text='VRChat Join Notification with Pushover - Setting'
   $form.Size=New-Object System.Drawing.Size(700,260)
   $form.StartPosition='CenterScreen'
 
