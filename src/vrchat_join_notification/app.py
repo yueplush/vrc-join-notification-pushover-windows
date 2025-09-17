@@ -1,4 +1,4 @@
-"""VRChat Join Notifier (Linux).
+"""VRChat Join Notification with Pushover (Linux).
 
 This module mirrors the behaviour of the Windows PowerShell implementation while
 using a Tkinter GUI, libnotify desktop notifications and Pushover pushes.
@@ -40,7 +40,7 @@ else:  # pragma: no cover - optional dependency
     Image = None  # type: ignore
     ImageDraw = None  # type: ignore
 
-APP_NAME = "VRChat Join Notifier"
+APP_NAME = "VRChat Join Notification with Pushover"
 CONFIG_FILE_NAME = "config.json"
 POINTER_FILE_NAME = "config-location.txt"
 APP_LOG_NAME = "notifier.log"
@@ -1230,6 +1230,12 @@ class AppController:
 
     def _build_ui(self) -> None:
         self.root.title(f"{APP_NAME} (Linux)")
+        self.root.iconname("VRC-Notifier")
+        try:
+            self.root.wm_class("VRC-Notifier", "VRC-Notifier")
+        except tk.TclError:
+            # Some window managers or Tk builds may not support updating the class name.
+            pass
         main = ttk.Frame(self.root, padding=12)
         main.pack(fill=tk.BOTH, expand=True)
 
