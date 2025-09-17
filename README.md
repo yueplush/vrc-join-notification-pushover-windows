@@ -39,11 +39,11 @@ cd vrchat-join-notification-with-pushover
    ```powershell
    Install-Module -Name ps2exe -Scope CurrentUser
    ```
-2. Run the script directly:
+　 if you want test, just Run the script directly:
    ```powershell
    .\src\vrchat-join-notification-with-pushover.ps1
    ```
-   or build an `.exe`:
+2. or build an `.exe`:
    ```powershell
    Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
      -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
