@@ -243,7 +243,14 @@ def normalize_join_fragment(text: str) -> str:
 
 def normalize_join_name(name: str) -> str:
     clean = normalize_join_fragment(name)
-    return clean or "Someone"
+    return clean or ""
+
+
+def is_placeholder_name(name: str) -> bool:
+    if not name:
+        return True
+    trimmed = name.strip().lower()
+    return trimmed in {"player", "you", "someone", "a player"}
 
 
 def get_short_hash(text: str) -> str:
@@ -301,12 +308,10 @@ def parse_player_event_line(line: str, event_token: str = "OnPlayerJoined") -> O
 
     if not display_name and user_id:
         display_name = user_id
-    if not display_name:
-        display_name = "Someone"
 
     safe_line = strip_zero_width(line).replace("||", "|").strip()
     return {
-        "name": display_name,
+        "name": display_name or "",
         "user_id": user_id or "",
         "raw_line": safe_line,
     }
@@ -720,6 +725,7 @@ class SessionTracker:
         self.session_last_join_at: Optional[datetime] = None
         self.session_last_join_raw: Optional[str] = None
         self.last_notified: Dict[str, datetime] = {}
+        self.local_user_id: Optional[str] = None
 
     def reset_session_state(self) -> None:
         self.ready = False
@@ -729,6 +735,7 @@ class SessionTracker:
         self.session_last_join_at = None
         self.session_last_join_raw = None
         self.pending_room = None
+        self.local_user_id = None
 
     def ensure_session_ready(self, reason: str) -> bool:
         if self.ready:
@@ -871,9 +878,35 @@ class SessionTracker:
             return
         event_time = datetime.utcnow()
         self.session_last_join_at = event_time
+        self.session_last_join_raw = raw_line
         cleaned_name = normalize_join_name(name)
         cleaned_user = user_id.strip()
-        key_base = cleaned_user.lower() if cleaned_user else cleaned_name.lower()
+        user_key = cleaned_user.lower() if cleaned_user else ""
+        if user_key and self.local_user_id and user_key == self.local_user_id:
+            self.logger.log(f"Skipping join for known local userId '{cleaned_user}'.")
+            return
+        is_placeholder = is_placeholder_name(cleaned_name)
+        is_fallback_session = self.source == "OnPlayerJoined fallback"
+        if is_placeholder and user_key:
+            if is_fallback_session and not self.local_user_id:
+                self.local_user_id = user_key
+                self.logger.log(f"Learned local userId from join event: {cleaned_user}")
+                self.logger.log(
+                    f"Skipping initial local join placeholder for userId '{cleaned_user}'."
+                )
+                return
+            if self.local_user_id and self.local_user_id == user_key:
+                self.logger.log(f"Skipping local join placeholder for userId '{cleaned_user}'.")
+                return
+        if not cleaned_name and cleaned_user:
+            cleaned_name = cleaned_user
+            is_placeholder = False
+        elif is_placeholder and cleaned_user:
+            cleaned_name = cleaned_user
+            is_placeholder = False
+        if not cleaned_name:
+            cleaned_name = "Unknown VRChat user"
+        key_base = user_key or cleaned_name.lower()
         hash_suffix = ""
         if not cleaned_user and raw_line:
             hash_suffix = get_short_hash(raw_line)
@@ -890,15 +923,30 @@ class SessionTracker:
             log_line += f" ({cleaned_user})"
         log_line += "."
         self.logger.log(log_line)
-        if cleaned_name == "Someone" and raw_line:
-            self.logger.log(f"Join parse fallback for line: {raw_line}")
 
     def handle_player_left(self, name: str, user_id: str, raw_line: str) -> None:
         cleaned_name = normalize_join_name(name)
         cleaned_user = user_id.strip()
+        user_key = cleaned_user.lower() if cleaned_user else ""
+        is_placeholder = is_placeholder_name(cleaned_name)
+        if is_placeholder and user_key:
+            if not self.local_user_id:
+                self.local_user_id = user_key
+                self.logger.log(f"Learned local userId from leave event: {cleaned_user}")
+            elif self.local_user_id == user_key:
+                cleaned_name = cleaned_user
+                is_placeholder = False
+        if not cleaned_name and cleaned_user:
+            cleaned_name = cleaned_user
+            is_placeholder = False
+        elif is_placeholder and cleaned_user:
+            cleaned_name = cleaned_user
+            is_placeholder = False
+        if not cleaned_name:
+            cleaned_name = "Unknown VRChat user"
         removed_count = 0
-        if cleaned_user:
-            prefix = f"join:{self.session_id}:{cleaned_user.lower()}"
+        if user_key:
+            prefix = f"join:{self.session_id}:{user_key}"
             keys_to_remove = [key for key in self.seen_players if key.startswith(prefix)]
             for key in keys_to_remove:
                 self.seen_players.pop(key, None)
@@ -910,8 +958,6 @@ class SessionTracker:
             log_line += " [cleared join tracking]"
         log_line += "."
         self.logger.log(log_line)
-        if cleaned_name == "Someone" and raw_line:
-            self.logger.log(f"Leave parse fallback for line: {raw_line}")
 
 
 class LogMonitor(threading.Thread):
@@ -1006,7 +1052,7 @@ class LogMonitor(threading.Thread):
             return
         if self._re_leave.search(safe_line):
             parsed = parse_player_event_line(safe_line, "OnPlayerLeft") or {
-                "name": "Someone",
+                "name": "",
                 "user_id": "",
                 "raw_line": safe_line,
             }
@@ -1014,7 +1060,7 @@ class LogMonitor(threading.Thread):
             return
         if self._re_join.search(safe_line):
             parsed = parse_player_event_line(safe_line, "OnPlayerJoined") or {
-                "name": "Someone",
+                "name": "",
                 "user_id": "",
                 "raw_line": safe_line,
             }
@@ -1227,14 +1273,20 @@ class AppController:
             self.last_event_var.set("OnJoinedRoom detected.")
         elif etype == "player_join":
             info = event[1]
-            self.session.handle_player_join(info.get("name", "Someone"), info.get("user_id", ""), info.get("raw_line", ""))
+            self.session.handle_player_join(
+                info.get("name", ""), info.get("user_id", ""), info.get("raw_line", "")
+            )
             self.session_var.set(self._session_description())
-            self.last_event_var.set(f"Player joined: {info.get('name', 'Someone')}")
+            display = info.get("name") or info.get("user_id") or "Unknown VRChat user"
+            self.last_event_var.set(f"Player joined: {display}")
         elif etype == "player_left":
             info = event[1]
-            self.session.handle_player_left(info.get("name", "Someone"), info.get("user_id", ""), info.get("raw_line", ""))
+            self.session.handle_player_left(
+                info.get("name", ""), info.get("user_id", ""), info.get("raw_line", "")
+            )
             self.session_var.set(self._session_description())
-            self.last_event_var.set(f"Player left: {info.get('name', 'Someone')}")
+            display = info.get("name") or info.get("user_id") or "Unknown VRChat user"
+            self.last_event_var.set(f"Player left: {display}")
         self.status_var.set(self.status_var.get())
         self._update_tray_state()
 
