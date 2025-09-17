@@ -125,6 +125,21 @@ Click **Save & Restart Monitoring** to begin watching the log file. Settings per
 
 When the tray extras are installed, the notifier adds a tray icon with quick actions to open the settings window, start/stop monitoring, and exit. Closing the main window simply hides it, allowing the app to continue monitoring in the background.
 
+### Uninstalling on Linux
+
+Remove the Python package with the same tool you used to install it:
+
+- **pip / pip install --user**
+  ```bash
+  python3 -m pip uninstall vrchat-join-notification-with-pushover
+  ```
+- **pipx**
+  ```bash
+  pipx uninstall vrchat-join-notification-with-pushover
+  ```
+
+After uninstalling, you can delete the app's data directory (defaults to `~/.local/share/vrchat-join-notification-with-pushover`) if you no longer need your saved settings or cached logs.
+
 ### Desktop & push notifications
 
 - Linux desktop notifications mirror the Windows behaviour and obey the same cooldowns—one toast per unique event.
