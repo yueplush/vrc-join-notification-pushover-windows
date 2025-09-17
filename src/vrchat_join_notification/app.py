@@ -1233,7 +1233,7 @@ class AppController:
         self.root.iconname("VRC-Notifier")
         try:
             self.root.wm_class("VRC-Notifier", "VRC-Notifier")
-        except tk.TclError:
+        except (AttributeError, tk.TclError):
             # Some window managers or Tk builds may not support updating the class name.
             pass
         main = ttk.Frame(self.root, padding=12)
