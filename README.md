@@ -127,6 +127,14 @@ pipx install .
 pipx install '.[tray]'
 ```
 
+> [!NOTE]
+> If you previously installed the package with `pip` (including
+> `pip install --user`), remove that copy before switching to `pipx` so
+> the launcher can be created without warnings. Uninstall with `pip
+> uninstall vrchat-join-notification-with-pushover` or delete the old
+> `~/.local/bin/vrchat-join-notifier` script and re-run the `pipx`
+> command.
+
 ### 3. Launch the notifier
 
 Run the command that gets added to your `$PATH`:
