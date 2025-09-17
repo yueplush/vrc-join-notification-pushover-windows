@@ -6,6 +6,7 @@ using a Tkinter GUI, libnotify desktop notifications and Pushover pushes.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import queue
@@ -20,11 +21,22 @@ from typing import Dict, Optional, Tuple
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-try:
+if importlib.util.find_spec("urllib.parse") and importlib.util.find_spec("urllib.request"):
     import urllib.parse
     import urllib.request
-except ImportError:  # pragma: no cover - stdlib should always be present
+else:  # pragma: no cover - stdlib should always be present
     urllib = None  # type: ignore
+
+_TRAY_SPEC = importlib.util.find_spec("pystray")
+_PIL_SPEC = importlib.util.find_spec("PIL.Image")
+_PIL_DRAW_SPEC = importlib.util.find_spec("PIL.ImageDraw")
+if _TRAY_SPEC and _PIL_SPEC and _PIL_DRAW_SPEC:
+    import pystray
+    from PIL import Image, ImageDraw
+else:  # pragma: no cover - optional dependency
+    pystray = None  # type: ignore
+    Image = None  # type: ignore
+    ImageDraw = None  # type: ignore
 
 APP_NAME = "VRChat Join Notifier"
 CONFIG_FILE_NAME = "config.json"
@@ -34,6 +46,9 @@ PO_URL = "https://api.pushover.net/1/messages.json"
 NOTIFY_COOLDOWN_SECONDS = 10
 SESSION_FALLBACK_GRACE_SECONDS = 30
 SESSION_FALLBACK_MAX_CONTINUATION_SECONDS = 4
+ICON_FILE_NAME = "notification.ico"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _expand_path(path: str) -> str:
@@ -490,6 +505,131 @@ class PushoverClient:
             self._logger.log(f"Pushover error: {exc}")
 
 
+class TrayIconController:
+    def __init__(self, app: "AppController", logger: AppLogger) -> None:
+        self.app = app
+        self.logger = logger
+        self.available = bool(pystray and Image and ImageDraw)
+        self.icon: Optional["pystray.Icon"] = None
+        self._icon_idle: Optional["Image.Image"] = None
+        self._icon_active: Optional["Image.Image"] = None
+        self._base_icon: Optional["Image.Image"] = None
+        self._thread: Optional[threading.Thread] = None
+        self._ready = threading.Event()
+        self._active = False
+        self._tooltip = APP_NAME
+
+    def start(self) -> None:
+        if not self.available:
+            self.logger.log(
+                "Tray icon disabled: install 'pystray' and 'Pillow' to enable it."
+            )
+            return
+        if self.icon is not None:
+            return
+        self._icon_idle = self._create_icon(False)
+        self._icon_active = self._create_icon(True)
+        menu = pystray.Menu(
+            pystray.MenuItem("Open Settings", self._menu_open, default=True),
+            pystray.MenuItem("Start Monitoring", self._menu_start),
+            pystray.MenuItem("Stop Monitoring", self._menu_stop),
+            pystray.MenuItem("Quit", self._menu_quit),
+        )
+        self.icon = pystray.Icon(
+            "vrchat-join-notifier",
+            self._icon_idle,
+            APP_NAME,
+            menu,
+        )
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self.icon is not None:
+            try:
+                self.icon.stop()
+            except Exception:
+                pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self.icon = None
+        self._thread = None
+        self._ready.clear()
+
+    def update_state(self, monitoring: bool, tooltip: str) -> None:
+        if not self.available:
+            return
+        self._active = monitoring
+        self._tooltip = tooltip
+        self._apply_state()
+
+    def _run(self) -> None:
+        if self.icon is None:
+            return
+        self.icon.run(self._on_setup, self._on_teardown)
+
+    def _on_setup(self, icon: "pystray.Icon") -> None:
+        self._ready.set()
+        icon.visible = True
+        self._apply_state()
+
+    def _on_teardown(self, icon: "pystray.Icon") -> None:
+        self._ready.clear()
+
+    def _apply_state(self) -> None:
+        if not self.available or self.icon is None or not self._ready.is_set():
+            return
+        if self._active and self._icon_active is not None:
+            self.icon.icon = self._icon_active
+        elif self._icon_idle is not None:
+            self.icon.icon = self._icon_idle
+        self.icon.title = self._tooltip
+
+    def _menu_open(self, icon: "pystray.Icon", item: "pystray.MenuItem") -> None:
+        self.app.root.after(0, self.app.show_window)
+
+    def _menu_start(self, icon: "pystray.Icon", item: "pystray.MenuItem") -> None:
+        self.app.root.after(0, self.app.start_monitoring)
+
+    def _menu_stop(self, icon: "pystray.Icon", item: "pystray.MenuItem") -> None:
+        self.app.root.after(0, self.app.stop_monitoring)
+
+    def _menu_quit(self, icon: "pystray.Icon", item: "pystray.MenuItem") -> None:
+        self.app.root.after(0, self.app.request_quit)
+
+    def _create_icon(self, active: bool) -> Optional["Image.Image"]:
+        if not self.available:
+            return None
+        base = self._load_base_icon()
+        if base is None:
+            size = 64
+            base = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(base)
+            draw.ellipse((4, 4, size - 4, size - 4), fill=(46, 134, 222, 255))
+            draw.ellipse((16, 16, size - 16, size - 16), fill=(255, 255, 255, 80))
+        image = base.copy()
+        if active:
+            overlay = Image.new("RGBA", image.size, (0, 180, 0, 90))
+        else:
+            overlay = Image.new("RGBA", image.size, (0, 0, 0, 110))
+        image = Image.alpha_composite(image, overlay)
+        return image
+
+    def _load_base_icon(self) -> Optional["Image.Image"]:
+        if not self.available:
+            return None
+        if self._base_icon is not None:
+            return self._base_icon
+        path = os.path.join(SCRIPT_DIR, ICON_FILE_NAME)
+        if os.path.exists(path):
+            try:
+                with Image.open(path) as handle:
+                    self._base_icon = handle.convert("RGBA").resize((64, 64))
+            except Exception as exc:
+                self.logger.log(f"Failed to load tray icon '{path}': {exc}")
+                self._base_icon = None
+        return self._base_icon
+
 class SessionTracker:
     def __init__(
         self,
@@ -821,6 +961,7 @@ class AppController:
         self.session = SessionTracker(self.notifier, self.pushover, logger)
         self.event_queue: queue.Queue = queue.Queue()
         self.monitor: Optional[LogMonitor] = None
+        self._quitting = False
 
         self.install_var = tk.StringVar(value=self.config.install_dir)
         self.log_dir_var = tk.StringVar(value=self.config.vrchat_log_dir)
@@ -833,8 +974,11 @@ class AppController:
         self.last_event_var = tk.StringVar(value="")
 
         self._build_ui()
+        self.tray = TrayIconController(self, logger)
+        self.tray.start()
         self.root.after(200, self._process_events)
         self.apply_startup_state()
+        self._update_tray_state()
 
     def apply_startup_state(self) -> None:
         if self.config.first_run:
@@ -842,13 +986,16 @@ class AppController:
                 "Welcome! Configure the install folder, VRChat log folder, and optional "
                 "Pushover keys, then click Save & Restart Monitoring."
             )
-            return
-        if self.config.pushover_user and self.config.pushover_token:
+        elif self.config.pushover_user and self.config.pushover_token:
             self.start_monitoring()
         else:
             self.status_var.set(
                 "Optional: enter your Pushover keys for push notifications, then click "
                 "Save & Restart Monitoring when you're ready."
+            )
+        if not self.tray.available:
+            self.status_var.set(
+                f"{self.status_var.get()} Tray icon disabled: install 'pystray' and 'Pillow' to enable it."
             )
 
     def _build_ui(self) -> None:
@@ -917,6 +1064,7 @@ class AppController:
         )
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.bind("<Unmap>", self._on_unmap)
 
     def _browse_install(self) -> None:
         directory = filedialog.askdirectory(initialdir=self.install_var.get() or os.getcwd())
@@ -955,6 +1103,7 @@ class AppController:
         self.monitor_status_var.set("Running")
         self.status_var.set("Monitoring VRChat logs…")
         self.logger.log("Monitoring started.")
+        self._update_tray_state()
 
     def stop_monitoring(self) -> None:
         if self.monitor:
@@ -963,6 +1112,7 @@ class AppController:
             self.monitor = None
             self.logger.log("Monitoring stopped.")
         self.monitor_status_var.set("Stopped")
+        self._update_tray_state()
 
     def _process_events(self) -> None:
         try:
@@ -1014,6 +1164,7 @@ class AppController:
             self.session_var.set(self._session_description())
             self.last_event_var.set(f"Player left: {info.get('name', 'Someone')}")
         self.status_var.set(self.status_var.get())
+        self._update_tray_state()
 
     def _session_description(self) -> str:
         if self.session.ready:
@@ -1022,8 +1173,58 @@ class AppController:
         return "No active session"
 
     def on_close(self) -> None:
+        if self._quitting:
+            self.root.destroy()
+            return
+        self.hide_window()
+        self.status_var.set(
+            "Settings window hidden. Use the tray icon to reopen or quit the notifier."
+        )
+
+    def _on_unmap(self, event: tk.Event) -> None:
+        if self._quitting:
+            return
+        if event.widget is self.root and self.root.state() == "iconic":
+            self.hide_window()
+
+    def show_window(self) -> None:
+        if self._quitting:
+            return
+        self.root.deiconify()
+        try:
+            self.root.state("normal")
+        except tk.TclError:
+            pass
+        self.root.lift()
+        self.root.focus_force()
+        try:
+            self.root.attributes("-topmost", True)
+            self.root.after(100, lambda: self.root.attributes("-topmost", False))
+        except tk.TclError:
+            pass
+
+    def hide_window(self) -> None:
+        if self._quitting:
+            return
+        self.root.withdraw()
+
+    def request_quit(self) -> None:
+        if self._quitting:
+            return
+        self._quitting = True
         self.stop_monitoring()
-        self.root.destroy()
+        if hasattr(self, "tray") and self.tray is not None:
+            self.tray.stop()
+        self.root.after(0, self.root.destroy)
+
+    def _update_tray_state(self) -> None:
+        monitoring = self.monitor is not None
+        tooltip = f"{APP_NAME} – {'Monitoring' if monitoring else 'Stopped'}"
+        session_desc = self._session_description()
+        if self.session.ready:
+            tooltip += f"\n{session_desc}"
+        if hasattr(self, "tray") and self.tray is not None:
+            self.tray.update_state(monitoring, tooltip)
 
 
 def main() -> None:
