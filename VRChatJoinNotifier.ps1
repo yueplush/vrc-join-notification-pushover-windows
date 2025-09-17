@@ -421,6 +421,95 @@ function Start-Follow{
       return [pscustomobject]@{ Name=$displayName; UserId=$userId }
     }
 
+    # Detects world/instance transitions for the local player even when VRChat logs
+    # use localized phrases (e.g. Japanese) or alternative wording.
+    function Parse-RoomTransitionLine([string]$line){
+      if([string]::IsNullOrWhiteSpace($line)){ return $null }
+
+      $clean = [regex]::Replace($line,'[\u200B-\u200D\uFEFF]','')
+      $clean = $clean.Trim()
+      if([string]::IsNullOrWhiteSpace($clean)){ return $null }
+
+      $lower = $clean.ToLowerInvariant()
+
+      $indicators = @(
+        'joining or creating room',
+        'entering room',
+        'joining room',
+        'creating room',
+        'created room',
+        'rejoining room',
+        're-joining room',
+        'reentering room',
+        're-entering room',
+        'joining instance',
+        'creating instance',
+        'entering instance'
+      )
+
+      $matched = $false
+      foreach($indicator in $indicators){
+        if($lower.Contains($indicator)){
+          $matched = $true
+          break
+        }
+      }
+
+      if(-not $matched){
+        $jpSets = @(
+          @{ Key='ルーム'; Terms=@('参加','作成','入室','移動','入場') },
+          @{ Key='インスタンス'; Terms=@('参加','作成','入室','移動','入場') }
+        )
+        foreach($set in $jpSets){
+          if($clean.Contains($set.Key)){
+            foreach($term in $set.Terms){
+              if($clean.Contains($term)){
+                $matched = $true
+                break
+              }
+            }
+          }
+          if($matched){ break }
+        }
+      }
+
+      if(-not $matched){
+        if($clean -match '(?i)\bwrld_[0-9a-f\-]+\b'){
+          if($lower.Contains('room') -or $lower.Contains('instance') -or $clean.Contains('インスタンス') -or $clean.Contains('ルーム')){
+            $matched = $true
+          }
+        }
+      }
+
+      if(-not $matched){ return $null }
+
+      $worldId = ''
+      $instanceId = ''
+
+      $worldMatch = [regex]::Match($clean,'wrld_[0-9a-f\-]+','IgnoreCase')
+      if($worldMatch.Success){
+        $worldId = $worldMatch.Value
+
+        $afterWorld = ''
+        try{ $afterWorld = $clean.Substring($worldMatch.Index + $worldMatch.Length) }catch{ $afterWorld = '' }
+
+        if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
+          $afterWorld = $afterWorld.TrimStart(':',' ','`t','-')
+          if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
+            $instMatch = [regex]::Match($afterWorld,'^[^\s,]+')
+            if($instMatch.Success){ $instanceId = $instMatch.Value }
+          }
+        }
+      }
+
+      if([string]::IsNullOrWhiteSpace($instanceId)){
+        $instAlt = [regex]::Match($clean,'(?i)instance\s*[:=]\s*([^\s,]+)')
+        if($instAlt.Success){ $instanceId = $instAlt.Groups[1].Value }
+      }
+
+      return [pscustomobject]@{ World=$worldId; Instance=$instanceId; RawLine=$clean }
+    }
+
     $reSelf = [regex]'(?i)\[Behaviour\].*OnJoinedRoom\b'
     $reJoin = [regex]'(?i)\[Behaviour\].*OnPlayerJoined\b'
 
@@ -474,36 +563,11 @@ function Start-Follow{
             continue
           }
 
-          if($lowerLine.Contains('joining or creating room') -or $lowerLine.Contains('entering room')){
-            $worldId = ''
-            $instanceId = ''
-
-            $worldMatch = [regex]::Match($line,'wrld_[0-9a-f\-]+','IgnoreCase')
-            if($worldMatch.Success){
-              $worldId = $worldMatch.Value
-
-              $afterWorld = ''
-              try{
-                $afterWorld = $line.Substring($worldMatch.Index + $worldMatch.Length)
-              }catch{ $afterWorld = '' }
-
-              if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
-                $afterWorld = $afterWorld.TrimStart(':',' ','`t')
-                if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
-                  $instMatch = [regex]::Match($afterWorld,'^[^\s]+')
-                  if($instMatch.Success){ $instanceId = $instMatch.Value }
-                }
-              }
-            }
-
-            if([string]::IsNullOrWhiteSpace($instanceId)){
-              $instAlt = [regex]::Match($line,'(?i)instance\s*[:=]\s*([^\s,]+)')
-              if($instAlt.Success){ $instanceId = $instAlt.Groups[1].Value }
-            }
-
-            $safeWorld = $worldId -replace '\|\|','|'
-            $safeInstance = $instanceId -replace '\|\|','|'
-            $safeLine = $line -replace '\|\|','|'
+          $roomEvent = Parse-RoomTransitionLine $line
+          if($roomEvent){
+            $safeWorld = $roomEvent.World -replace '\|\|','|'
+            $safeInstance = $roomEvent.Instance -replace '\|\|','|'
+            $safeLine = $roomEvent.RawLine -replace '\|\|','|'
             Write-Output ("ROOM_EVENT||ENTER||" + $safeWorld + "||" + $safeInstance + "||" + $safeLine)
             continue
           }
