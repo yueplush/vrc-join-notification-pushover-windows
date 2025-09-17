@@ -13,7 +13,7 @@ import re
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 
@@ -42,8 +42,15 @@ def _expand_path(path: str) -> str:
 
 
 def _default_storage_root() -> str:
-    root = os.path.join(os.path.expanduser("~/.local/share"), "VRChatJoinNotifier")
+    root = os.path.join(
+        os.path.expanduser("~/.local/share"), "vrchat-join-notification-with-pushover"
+    )
     return _expand_path(root)
+
+
+def _legacy_storage_roots() -> Tuple[str, ...]:
+    legacy_root = os.path.join(os.path.expanduser("~/.local/share"), "VRChatJoinNotifier")
+    return (_expand_path(legacy_root),)
 
 
 def _guess_vrchat_log_dir() -> str:
@@ -64,15 +71,21 @@ class AppConfig:
     vrchat_log_dir: str
     pushover_user: str = ""
     pushover_token: str = ""
+    first_run: bool = field(default=False, init=False)
 
     @classmethod
     def load(cls) -> Tuple["AppConfig", Optional[str]]:
         storage_root = _default_storage_root()
         os.makedirs(storage_root, exist_ok=True)
-        pointer_path = os.path.join(storage_root, POINTER_FILE_NAME)
-
         install_dir = storage_root
-        if os.path.exists(pointer_path):
+        pointer_candidates = [os.path.join(storage_root, POINTER_FILE_NAME)]
+        for legacy_root in _legacy_storage_roots():
+            if legacy_root != storage_root:
+                pointer_candidates.append(os.path.join(legacy_root, POINTER_FILE_NAME))
+
+        for pointer_path in pointer_candidates:
+            if not os.path.exists(pointer_path):
+                continue
             try:
                 with open(pointer_path, "r", encoding="utf-8") as handle:
                     raw = handle.read().strip()
@@ -80,22 +93,37 @@ class AppConfig:
                     candidate = _expand_path(raw)
                     if os.path.isdir(candidate):
                         install_dir = candidate
+                        break
             except OSError:
-                pass
+                continue
 
         config_path = os.path.join(install_dir, CONFIG_FILE_NAME)
         fallback_path = os.path.join(storage_root, CONFIG_FILE_NAME)
         data: Dict[str, str] = {}
         load_error: Optional[str] = None
 
-        if os.path.exists(config_path):
+        config_exists = os.path.exists(config_path)
+        fallback_exists = os.path.exists(fallback_path)
+
+        if not config_exists and not fallback_exists:
+            for legacy_root in _legacy_storage_roots():
+                legacy_config = os.path.join(legacy_root, CONFIG_FILE_NAME)
+                if os.path.exists(legacy_config):
+                    install_dir = legacy_root
+                    config_path = legacy_config
+                    config_exists = True
+                    break
+
+        first_run = not config_exists and not fallback_exists
+
+        if config_exists:
             try:
                 with open(config_path, "r", encoding="utf-8") as handle:
                     data = json.load(handle)
             except Exception as exc:  # pragma: no cover - defensive
                 load_error = f"Failed to load settings: {exc}"
                 data = {}
-        elif install_dir != storage_root and os.path.exists(fallback_path):
+        elif install_dir != storage_root and fallback_exists:
             try:
                 with open(fallback_path, "r", encoding="utf-8") as handle:
                     data = json.load(handle)
@@ -110,6 +138,26 @@ class AppConfig:
             pushover_user=str(data.get("PushoverUser", "")),
             pushover_token=str(data.get("PushoverToken", "")),
         )
+        legacy_roots = _legacy_storage_roots()
+        if legacy_roots:
+            primary_legacy = legacy_roots[0]
+            if (
+                os.path.abspath(cfg.install_dir) == primary_legacy
+                and primary_legacy != storage_root
+            ):
+                new_config_path = os.path.join(storage_root, CONFIG_FILE_NAME)
+                if os.path.exists(new_config_path):
+                    cfg.install_dir = storage_root
+                else:
+                    original_dir = cfg.install_dir
+                    cfg.install_dir = storage_root
+                    try:
+                        cfg.save()
+                    except Exception:
+                        cfg.install_dir = original_dir
+                    else:
+                        cfg.install_dir = storage_root
+        cfg.first_run = first_run
         cfg.ensure_install_dir()
         cfg._write_pointer()
         return cfg, load_error
@@ -131,6 +179,7 @@ class AppConfig:
         with open(self.config_path(), "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, ensure_ascii=False)
         self._write_pointer()
+        self.first_run = False
 
     def _write_pointer(self) -> None:
         storage_root = _default_storage_root()
@@ -785,6 +834,22 @@ class AppController:
 
         self._build_ui()
         self.root.after(200, self._process_events)
+        self.apply_startup_state()
+
+    def apply_startup_state(self) -> None:
+        if self.config.first_run:
+            self.status_var.set(
+                "Welcome! Configure the install folder, VRChat log folder, and optional "
+                "Pushover keys, then click Save & Restart Monitoring."
+            )
+            return
+        if self.config.pushover_user and self.config.pushover_token:
+            self.start_monitoring()
+        else:
+            self.status_var.set(
+                "Optional: enter your Pushover keys for push notifications, then click "
+                "Save & Restart Monitoring when you're ready."
+            )
 
     def _build_ui(self) -> None:
         self.root.title(f"{APP_NAME} (Linux)")
@@ -819,7 +884,7 @@ class AppController:
         button_frame.columnconfigure(1, weight=1)
         button_frame.columnconfigure(2, weight=1)
 
-        ttk.Button(button_frame, text="Save && Restart Monitoring", command=self.save_and_restart).grid(
+        ttk.Button(button_frame, text="Save & Restart Monitoring", command=self.save_and_restart).grid(
             row=0, column=0, padx=4, sticky=tk.EW
         )
         ttk.Button(button_frame, text="Start Monitoring", command=self.start_monitoring).grid(
@@ -968,10 +1033,7 @@ def main() -> None:
     controller = AppController(root, config, logger)
     if load_error:
         messagebox.showerror(APP_NAME, load_error)
-    if not config.pushover_user or not config.pushover_token:
-        controller.status_var.set("Configure your Pushover credentials and press Save.")
-    else:
-        controller.start_monitoring()
+        controller.status_var.set(load_error)
     root.mainloop()
 
 
