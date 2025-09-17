@@ -57,8 +57,13 @@ A native Linux port with a Tk GUI is provided in
 
 ### Running
 
+```powershell(git clone)
+# git clone source files
+git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+```
+
 ```bash
-python3 vrchat-join-notification-with-pushover_linux.py
+python3 \src\vrchat-join-notification-with-pushover_linux.py
 ```
 
 On the first launch the settings window opens automatically. Configure:
