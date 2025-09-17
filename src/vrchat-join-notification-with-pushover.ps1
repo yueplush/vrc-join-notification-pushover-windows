@@ -1,18 +1,17 @@
 #requires -Version 5.1
-Param([switch]$open_settings)
+Param(
+    [switch]$OpenSettings
+)
 
-<#
-VRChat Join Notifier (fixed tray pulse + single Settings window + safe string ops)
-- FIX: Tray pulse no longer throws "$frame/$t not set" after ps2exe (use $global: state only)
-- FIX: Removed "-f" format operator to avoid "$f?" mis-parsing in some ps2exe builds
-- Single Settings window (no duplicates)
-- Tray "Restart Monitoring" animates icon (pulse) a few seconds and shows toast/balloon
-- Tails newest VRChat log (output_log_*.txt or Player.log); auto-switches when a newer file appears
-- Notifies once when YOU join (OnJoinedRoom) and once per OTHER join (OnPlayerJoined) in the same session
-- Only while VRChat.exe is running
-- Single-process (Mutex + named Event). Secondary launch signals "open settings" to primary and exits
-- Windows Toast via BurntToast with balloon fallback
-- Pushover push
+<#+
+VRChat Join Notification with Pushover (Windows, rewritten)
+
+This PowerShell build mirrors the Python/Tk Linux application:
+- WinForms configuration window that matches the Linux layout.
+- Tray icon with quick actions and live status text.
+- Log follower with the same session-tracking heuristics as the Python port.
+- Optional Pushover pushes.
+- JSON settings stored next to the local cache/log directory.
 #>
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -21,1401 +20,1551 @@ Add-Type -AssemblyName System.Drawing
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# ---------------- App constants ----------------
-$AppName        = 'System Notification'
+# ------------------------------- Constants -------------------------------
+$AppName        = 'VRChat Join Notification with Pushover'
 $ConfigFileName = 'config.json'
 $AppLogName     = 'notifier.log'
 $POUrl          = 'https://api.pushover.net/1/messages.json'
+$IconFileName   = 'notification.ico'
 
-$EnDash = [char]0x2013
-$EmDash = [char]0x2014
-$JoinSeparatorChars = [char[]]@('-',':','|',$EnDash,$EmDash)
-$JoinSeparatorString = -join $JoinSeparatorChars
+$NotifyCooldownSeconds                 = 10
+$SessionFallbackGraceSeconds           = 30
+$SessionFallbackMaxContinuationSeconds = 4
+
+$JoinSeparatorChars = [char[]]@('-', ':', '|', [char]0x2013, [char]0x2014)
 $JoinSeparatorOnlyPattern = '^[\-:|\u2013\u2014]+$'
 
-$DefaultInstallDir   = Join-Path $env:LOCALAPPDATA 'VRChatJoinNotificationWithPushover'
-$DefaultVRChatLogDir = Join-Path ($env:LOCALAPPDATA -replace '\\Local$', '\LocalLow') 'VRChat\VRChat'
+# ------------------------------- Globals ---------------------------------
+$script:Config = $null
+$script:LoadError = $null
+$script:EventQueue = [System.Collections.Concurrent.ConcurrentQueue[object[]]]::new()
+$script:MonitorThread = $null
+$script:MonitorTokenSource = $null
+$script:LoggerLock = New-Object System.Object
+$script:IsQuitting = $false
+$script:TrayIcon = $null
 
-# ---------------- Cooldown (anti-spam) ----------------
-$NotifyCooldownSeconds = 10
-$SessionFallbackGraceSeconds = 30 # allow quick OnJoinedRoom confirmations to reuse fallback session
-$SessionFallbackMaxContinuationSeconds = 4 # require OnJoinedRoom to arrive quickly after fallback joins to reuse
-$script:LastNotified = @{}
-$script:SessionId = 0         # increments on each detected session
-$script:SeenPlayers = @{}     # join key -> first seen time (per session)
-$script:LocalUserId = $null   # tracks the local player's userId when known (lowercase)
-$script:SessionLastJoinAt = $null
-$script:SessionReady = $false # true once current session started
-$script:SessionSource = ''    # remember how the session started
-$script:PendingRoom = $null   # upcoming room/world info (if detected)
-$script:PendingSelfJoin = $null # pending self join metadata
-$script:SessionStartedAt = $null
-
-# ---------------- Globals ----------------
-$global:Cfg = $null
-$global:TrayIcon = $null
-$global:TrayMenu = $null
-$global:HostForm = $null
-$global:FollowJob = $null
-
-# Only-one Settings window
-$global:SettingsForm = $null
-
-# Tray pulse animation state (ALL GLOBAL to be safe under ps2exe)
-$global:IconIdle    = $null
-$global:IconPulseA  = $null
-$global:IconPulseB  = $null
-$global:PulseTimer  = $null
-$global:PulseStopAt = Get-Date
-$global:PulseFrame  = $false
-$global:IdleTooltip = $AppName
-
-# Single-instance control
-$script:IsPrimary = $false
-$script:Mutex     = $null
-$script:OpenEvt   = $null
-
-# Toast availability
-$script:ToastReady = $false
-
-# ---------------- Session helpers ----------------
-function Reset-SessionState{
-  $script:SessionReady = $false
-  $script:SessionSource = ''
-  $script:SeenPlayers = @{}
-  $script:LocalUserId = $null
-  $script:SessionStartedAt = $null
-  $script:SessionLastJoinAt = $null
-  $script:PendingRoom = $null
-  $script:PendingSelfJoin = $null
+$script:Session = [ordered]@{
+    SessionId          = 0
+    Ready              = $false
+    Source             = ''
+    SeenPlayers        = @{}
+    PendingRoom        = $null
+    SessionStartedAt   = $null
+    SessionLastJoinAt  = $null
+    SessionLastJoinRaw = $null
+    PendingSelfJoin    = $null
+    LastNotified       = @{}
+    LocalUserId        = $null
 }
-function Ensure-SessionReady([string]$Reason){
-  if($script:SessionReady){ return $false }
-  if([string]::IsNullOrWhiteSpace($Reason)){ $Reason = 'unknown trigger' }
-  $script:SessionId++
-  $script:SessionReady = $true
-  $script:SessionSource = $Reason
-  $script:SeenPlayers = @{}
-  $script:SessionStartedAt = Get-Date
-  $script:SessionLastJoinAt = $null
-  $roomDesc = $null
-  if($script:PendingRoom){
-    $pendingWorld = $script:PendingRoom.World
-    $pendingInstance = $script:PendingRoom.Instance
-    if(-not [string]::IsNullOrWhiteSpace($pendingWorld)){
-      $roomDesc = $pendingWorld
-      if(-not [string]::IsNullOrWhiteSpace($pendingInstance)){ $roomDesc += ":" + $pendingInstance }
+
+$script:Controls = @{}
+
+# ----------------------------- Helper utils ------------------------------
+function Expand-PathSafe {
+    Param([string]$Path)
+    if([string]::IsNullOrWhiteSpace($Path)){ return '' }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path.Trim())
+    try {
+        return [System.IO.Path]::GetFullPath($expanded)
+    } catch {
+        return $expanded
     }
-  }
-
-  $logMessage = "Session {0} started ({1})" -f $script:SessionId,$Reason
-  if($roomDesc){ $logMessage += " [" + $roomDesc + "]" }
-  $logMessage += "."
-  Write-AppLog $logMessage
-
-  if($global:TrayIcon){
-    $tip = $AppName
-    if($roomDesc){ $tip = "$AppName $EmDash $roomDesc" }
-    $global:IdleTooltip = $tip
-    try{ $global:TrayIcon.Text = $tip }catch{}
-  }
-  return $true
 }
 
-# ---------------- Helpers ----------------
-function Ensure-Dir($Path){ if(-not(Test-Path $Path)){ New-Item -ItemType Directory -Path $Path | Out-Null } }
-function Get-LauncherPath{
-  $arg0=[Environment]::GetCommandLineArgs()[0]
-  if($arg0 -and (Split-Path $arg0 -Leaf).ToLower().EndsWith('.exe')){ return $arg0 }
-  if($PSCommandPath){ return $PSCommandPath }
-  return $arg0
-}
-function Write-AppLog($Message){
-  try{
-    if(-not $global:Cfg){ return }
-    if([string]::IsNullOrWhiteSpace($global:Cfg.InstallDir)){ return }
-    Ensure-Dir $global:Cfg.InstallDir
-    $stamp=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    Add-Content -Path (Join-Path $global:Cfg.InstallDir $AppLogName) -Value ("[$stamp] " + $Message)
-  }catch{}
-}
-function Normalize-JoinName([string]$Name){
-  if([string]::IsNullOrWhiteSpace($Name)){ return $null }
-  $clean = [regex]::Replace($Name,'[\u200B-\u200D\uFEFF]','')
-  $clean = $clean.Trim()
-  $clean = $clean -replace '\u3000',' '
-  $clean = $clean.Trim([char]34).Trim([char]39).Trim()
-  $clean = $clean -replace '\|\|','|'
-  if([string]::IsNullOrWhiteSpace($clean)){ return $null }
-  if($clean.Length -gt 160){ $clean = $clean.Substring(0,160).Trim() }
-  if($clean -match $JoinSeparatorOnlyPattern){ return $null }
-  return $clean
-}
-function Is-PlaceholderName([string]$Name){
-  if([string]::IsNullOrWhiteSpace($Name)){ return $true }
-  $trimmed = $Name.Trim().ToLowerInvariant()
-  return @('player','you','someone','a player').Contains($trimmed)
-}
-function Get-ShortHash([string]$Text){
-  if([string]::IsNullOrEmpty($Text)){ return '' }
-  try{
-    $md5=[System.Security.Cryptography.MD5]::Create()
-    try{
-      $bytes=[System.Text.Encoding]::UTF8.GetBytes($Text)
-      $hash=$md5.ComputeHash($bytes)
-      return ($hash[0..3] | ForEach-Object { $_.ToString('x2') }) -join ''
-    }finally{
-      if($md5){ $md5.Dispose() }
+function Ensure-Dir {
+    Param([string]$Path)
+    if([string]::IsNullOrWhiteSpace($Path)){ return }
+    if(-not (Test-Path -Path $Path -PathType Container)){
+        New-Item -Path $Path -ItemType Directory -Force | Out-Null
     }
-  }catch{ return '' }
-}
-function Is-VRChatRunning {
-  try { @(Get-Process -Name 'VRChat' -ErrorAction SilentlyContinue).Count -gt 0 } catch { $false }
 }
 
-# ---------------- Single process ----------------
-function Get-InstanceNames {
-  $src = [System.IO.Path]::GetFullPath((Get-Command -Name ([Environment]::GetCommandLineArgs()[0])).Source)
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($src)
-  $md5   = [System.Security.Cryptography.MD5]::Create()
-  $hash  = ($md5.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join ''
-  @{ Mutex="Global\VRCJN_MUTEX_$hash"; Event="Global\VRCJN_OPENSETTINGS_$hash" }
-}
-function Init-SingleInstance{
-  $names = Get-InstanceNames
-  $created=$false
-  $script:Mutex = New-Object System.Threading.Mutex($true,$names.Mutex,[ref]$created)
-  $script:IsPrimary = $created
-
-  $dummy=$false
-  $script:OpenEvt = New-Object System.Threading.EventWaitHandle($false,[System.Threading.EventResetMode]::AutoReset,$names.Event,[ref]$dummy)
-
-  if(-not $script:IsPrimary){
-    try{ ([System.Threading.EventWaitHandle]::OpenExisting($names.Event)).Set() | Out-Null }catch{}
-    [Environment]::Exit(0)
-  }
-
-  [AppDomain]::CurrentDomain.add_ProcessExit({
-    try { if ($script:Mutex)     { $script:Mutex.ReleaseMutex() | Out-Null } } catch {}
-    try { if ($global:PulseTimer){ $global:PulseTimer.Stop(); $global:PulseTimer.Dispose() } } catch {}
-    try { if ($global:TrayIcon)  { $global:TrayIcon.Visible=$false; $global:TrayIcon.Dispose() } } catch {}
-    try { if ($global:HostForm)  { $global:HostForm.Close(); $global:HostForm.Dispose() } } catch {}
-  })
+function Get-DefaultInstallDir {
+    $root = [System.IO.Path]::Combine([Environment]::GetFolderPath('LocalApplicationData'), 'VRChatJoinNotificationWithPushover')
+    return Expand-PathSafe $root
 }
 
-# ---------------- Notifications ----------------
-function Ensure-ToastProvider{
-  if($script:ToastReady){ return $true }
-  try{
-    if(Get-Module -ListAvailable -Name BurntToast | Out-Null){
-      Import-Module BurntToast -ErrorAction SilentlyContinue
-      $script:ToastReady=$true; return $true
+function Get-LocalLowFolder {
+    $local = [Environment]::GetFolderPath('LocalApplicationData')
+    if($local -match '\\Local$'){
+        return Expand-PathSafe ($local -replace '\\Local$', '\\LocalLow')
     }
-  }catch{}
-  return $false
+    $user = [Environment]::GetFolderPath('UserProfile')
+    return Expand-PathSafe ([System.IO.Path]::Combine($user, 'AppData', 'LocalLow'))
 }
-function Offer-InstallBurntToast{
-  try{
-    $ans=[System.Windows.Forms.MessageBox]::Show(
-      "To show native Windows notifications, the free 'BurntToast' module is recommended.`r`nInstall now?",
-      'Enable Windows Toasts','YesNo','Information')
-    if($ans -eq 'Yes'){
-      Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-      Install-Module BurntToast -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-      Import-Module BurntToast -ErrorAction Stop
-      $script:ToastReady=$true; return $true
+
+function Guess-VRChatLogDir {
+    $candidates = @(
+        [System.IO.Path]::Combine((Get-LocalLowFolder), 'VRChat', 'VRChat'),
+        [System.IO.Path]::Combine([Environment]::GetFolderPath('MyDocuments'), 'VRChat', 'VRChat')
+    )
+    foreach($candidate in $candidates){
+        $expanded = Expand-PathSafe $candidate
+        if(Test-Path -Path $expanded -PathType Container){
+            return $expanded
+        }
     }
-  }catch{ Write-AppLog ("BurntToast install/import failed: " + $_.Exception.Message) }
-  return $false
+    return Expand-PathSafe $candidates[0]
 }
-function Show-Notification($Title,$Body){
-  if(Ensure-ToastProvider -or Offer-InstallBurntToast){
-    try{
-      $exe=Get-LauncherPath; $arg="--open-settings"
-      $hasNew = $null -ne (Get-Command -Name New-BTContent -ErrorAction SilentlyContinue)
-      if($hasNew){
-        $content = New-BTContent -Text $Title, $Body -Launch ("`"$exe`" " + $arg)
-        if($null -ne (Get-Command -Name New-BTButton -ErrorAction SilentlyContinue)){
-          $button = New-BTButton -Content 'Open Settings' -Arguments ("`"$exe`" " + $arg)
-          Submit-BTNotification -Content $content -Button $button | Out-Null
-        } else { Submit-BTNotification -Content $content | Out-Null }
-      } else {
-        $action = New-BTAction -Content 'Open Settings' -Arguments ("`"$exe`" " + $arg)
-        New-BurntToastNotification -Text $Title, $Body -Actions $action | Out-Null
-      }
-      return
-    }catch{ Write-AppLog ("Toast failed, fallback to balloon: " + $_.Exception.Message) }
-  }
-  Init-Tray
-  $global:TrayIcon.BalloonTipTitle=$Title
-  $global:TrayIcon.BalloonTipText =$Body
-  $global:TrayIcon.ShowBalloonTip(4000)
-}
-function Notify-All{
-  param(
-    $key,
-    $title,
-    $body,
-    [bool]$Desktop = $true
-  )
-  $now=Get-Date
-  if($script:LastNotified.ContainsKey($key)){
-    if(($now - $script:LastNotified[$key]).TotalSeconds -lt $NotifyCooldownSeconds){
-      Write-AppLog ("Suppressed '" + $key + "' within cooldown."); return
+
+function Load-AppConfig {
+    $installDir = Get-DefaultInstallDir
+    Ensure-Dir $installDir
+    $configPath = Join-Path $installDir $ConfigFileName
+    $data = $null
+    $loadError = $null
+    $firstRun = $true
+    if(Test-Path $configPath){
+        try {
+            $raw = Get-Content -Path $configPath -Raw -Encoding UTF8
+            if($raw){
+                $data = $raw | ConvertFrom-Json -ErrorAction Stop
+            }
+            $firstRun = $false
+        } catch {
+            $loadError = "Failed to load settings: $($_.Exception.Message)"
+            $data = $null
+        }
     }
-  }
-  $script:LastNotified[$key]=$now
-  if($Desktop){ Show-Notification $title $body }
-  Send-Pushover $title $body
-}
-
-# ---------------- Config ----------------
-function Load-Config{
-  $global:Cfg=[ordered]@{
-    InstallDir    = $DefaultInstallDir
-    VRChatLogDir  = $DefaultVRChatLogDir
-    PushoverUser  = ''
-    PushoverToken = ''
-  }
-  try{
-    Ensure-Dir $DefaultInstallDir
-    $path=Join-Path $DefaultInstallDir $ConfigFileName
-    if(Test-Path $path){
-      $json=Get-Content $path -Raw | ConvertFrom-Json
-      foreach($k in 'InstallDir','VRChatLogDir','PushoverUser','PushoverToken'){
-        if($json.PSObject.Properties.Name -contains $k){ $global:Cfg[$k]=$json.$k }
-      }
+    $install = $installDir
+    $logDir = Guess-VRChatLogDir
+    $user = ''
+    $token = ''
+    if($data){
+        if($data.PSObject.Properties['InstallDir']){ $install = Expand-PathSafe([string]$data.InstallDir) }
+        if($data.PSObject.Properties['VRChatLogDir']){ $logDir = Expand-PathSafe([string]$data.VRChatLogDir) }
+        if($data.PSObject.Properties['PushoverUser']){ $user = [string]$data.PushoverUser }
+        if($data.PSObject.Properties['PushoverToken']){ $token = [string]$data.PushoverToken }
     }
-  }catch{ Show-Notification $AppName ("Failed to load settings: " + $_.Exception.Message) }
-}
-function Save-Config{
-  try{
-    Ensure-Dir $global:Cfg.InstallDir
-    ($global:Cfg | ConvertTo-Json -Depth 3) | Set-Content -Path (Join-Path $global:Cfg.InstallDir $ConfigFileName) -Encoding UTF8
-    Write-AppLog "Settings saved."
-  }catch{
-    [System.Windows.Forms.MessageBox]::Show("Failed to save settings:`r`n" + $_.Exception.Message,'Error','OK','Error') | Out-Null
-  }
-}
-
-# ---------------- Pushover ----------------
-function Send-Pushover($Title,$Message){
-  if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverUser) -or [string]::IsNullOrWhiteSpace($global:Cfg.PushoverToken)){
-    Write-AppLog "Pushover not configured; skipping."; return
-  }
-  try{
-    $body=@{ token=$global:Cfg.PushoverToken; user=$global:Cfg.PushoverUser; title=$Title; message=$Message; priority=0 }
-    $resp=Invoke-RestMethod -Method Post -Uri $POUrl -Body $body -TimeoutSec 20
-    Write-AppLog ("Pushover sent: " + $resp.status)
-  }catch{ Write-AppLog ("Pushover error: " + $_.Exception.Message) }
-}
-
-# ---------------- Log selection helpers ----------------
-function Score-LogFile([System.IO.FileInfo]$f){
-  $a = $f.LastWriteTimeUtc
-  $b = $f.CreationTimeUtc
-  $best = $a
-  if($b -gt $best){ $best = $b }
-  $m = [regex]::Match($f.Name,'^output_log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.txt$', 'IgnoreCase')
-  if($m.Success){
-    try{
-      $dt = Get-Date -Year $m.Groups[1].Value -Month $m.Groups[2].Value -Day $m.Groups[3].Value `
-                     -Hour $m.Groups[4].Value -Minute $m.Groups[5].Value -Second $m.Groups[6].Value
-      $dt = $dt.ToUniversalTime()
-      if($dt -gt $best){ $best = $dt }
-    }catch{}
-  }
-  return $best
-}
-function Get-NewestLogPath{
-  if(-not(Test-Path $global:Cfg.VRChatLogDir)){ return $null }
-  $files=@()
-  $files += Get-ChildItem -Path $global:Cfg.VRChatLogDir -Filter 'output_log_*.txt' -File -ErrorAction SilentlyContinue
-  $player = Join-Path $global:Cfg.VRChatLogDir 'Player.log'
-  if(Test-Path $player){ $files += Get-Item $player }
-  if(-not $files){ return $null }
-  ($files | Sort-Object @{Expression={ Score-LogFile $_ } ; Descending=$true } | Select-Object -First 1).FullName
-}
-
-# ---------------- Log follower (job) ----------------
-function Stop-Follow{
-  if($global:FollowJob){
-    try{ Stop-Job $global:FollowJob -Force -ErrorAction SilentlyContinue | Out-Null }catch{}
-    try{ Remove-Job $global:FollowJob -Force -ErrorAction SilentlyContinue | Out-Null }catch{}
-    $global:FollowJob=$null
-  }
-}
-function Start-Follow{
-  Stop-Follow
-  $firstLog=Get-NewestLogPath
-  if(-not $firstLog){ Write-AppLog ("No VRChat logs under " + $global:Cfg.VRChatLogDir); return }
-  Write-AppLog ("Following: " + $firstLog)
-
-  $global:FollowJob = Start-Job -ScriptBlock {
-    param($InitialLogPath,$LogDir)
-
-    $EmDash = [char]0x2014
-    $EnDash = [char]0x2013
-    $JoinSeparatorChars = [char[]]@('-',':','|',$EnDash,$EmDash)
-    $JoinSeparatorString = -join $JoinSeparatorChars
-    $JoinSeparatorOnlyPattern = '^[\-:|\u2013\u2014]+$'
-
-    function Normalize-LogPath([string]$path){
-      if([string]::IsNullOrWhiteSpace($path)){ return $null }
-      try{ return [System.IO.Path]::GetFullPath($path) }catch{ return $path }
+    $cfg = [pscustomobject]@{
+        InstallDir    = $install
+        VRChatLogDir  = $logDir
+        PushoverUser  = $user
+        PushoverToken = $token
+        FirstRun      = $firstRun
     }
-    function Score-LogFile([System.IO.FileInfo]$f){
-      $a = $f.LastWriteTimeUtc
-      $b = $f.CreationTimeUtc
-      $best = $a
-      if($b -gt $best){ $best = $b }
-      $m = [regex]::Match($f.Name,'^output_log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.txt$', 'IgnoreCase')
-      if($m.Success){
-        try{
-          $dt = Get-Date -Year $m.Groups[1].Value -Month $m.Groups[2].Value -Day $m.Groups[3].Value `
-                         -Hour $m.Groups[4].Value -Minute $m.Groups[5].Value -Second $m.Groups[6].Value
-          $dt = $dt.ToUniversalTime()
-          if($dt -gt $best){ $best = $dt }
-        }catch{}
-      }
-      return $best
+    return ,@($cfg, $loadError)
+}
+
+function Save-AppConfig {
+    Param([pscustomobject]$Config)
+    if(-not $Config){ return }
+    if([string]::IsNullOrWhiteSpace($Config.InstallDir)){
+        throw 'Install directory is required.'
     }
-    function Get-Newest([string]$dir){
-      $files=@()
-      $files += Get-ChildItem -Path $dir -Filter 'output_log_*.txt' -File -ErrorAction SilentlyContinue
-      $player = Join-Path $dir 'Player.log'
-      if(Test-Path $player){ $files += Get-Item $player }
-      if(-not $files){ return $null }
-      ($files | Sort-Object @{Expression={ Score-LogFile $_ } ; Descending=$true } | Select-Object -First 1).FullName
+    Ensure-Dir $Config.InstallDir
+    $payload = [ordered]@{
+        InstallDir   = $Config.InstallDir
+        VRChatLogDir = $Config.VRChatLogDir
     }
-    function Normalize-JoinFragment([string]$text){
-      if([string]::IsNullOrWhiteSpace($text)){ return $null }
-      $tmp = [regex]::Replace($text,'[\u200B-\u200D\uFEFF]','')
-      $tmp = $tmp.Trim()
-      $tmp = $tmp -replace '\u3000',' '
-      $tmp = $tmp.Trim([char]34).Trim([char]39).Trim()
-      $tmp = $tmp.TrimStart($JoinSeparatorChars).Trim()
-      if([string]::IsNullOrWhiteSpace($tmp)){ return $null }
-      if($tmp.Length -gt 160){ $tmp = $tmp.Substring(0,160).Trim() }
-      if($tmp -match $JoinSeparatorOnlyPattern){ return $null }
-      return $tmp
+    if(-not [string]::IsNullOrWhiteSpace($Config.PushoverUser)){
+        $payload['PushoverUser'] = $Config.PushoverUser
     }
-    function Parse-PlayerEventLine([string]$line,[string]$eventToken = 'OnPlayerJoined'){
-      if([string]::IsNullOrWhiteSpace($line)){ return $null }
+    if(-not [string]::IsNullOrWhiteSpace($Config.PushoverToken)){
+        $payload['PushoverToken'] = $Config.PushoverToken
+    }
+    $json = ($payload | ConvertTo-Json -Depth 5)
+    $configPath = Join-Path $Config.InstallDir $ConfigFileName
+    Set-Content -Path $configPath -Value $json -Encoding UTF8
+    $Config.FirstRun = $false
+}
 
-      $needle = 'onplayerjoined'
-      if(-not [string]::IsNullOrWhiteSpace($eventToken)){
-        $needle = $eventToken.ToLowerInvariant()
-      }
+function Write-AppLog {
+    Param([string]$Message)
+    if(-not $script:Config){ return }
+    if([string]::IsNullOrWhiteSpace($script:Config.InstallDir)){ return }
+    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $line = "[$timestamp] $Message"
+    try {
+        Ensure-Dir $script:Config.InstallDir
+        $logPath = Join-Path $script:Config.InstallDir $AppLogName
+        [System.Threading.Monitor]::Enter($script:LoggerLock)
+        try {
+            Add-Content -Path $logPath -Value $line -Encoding UTF8
+        } finally {
+            [System.Threading.Monitor]::Exit($script:LoggerLock)
+        }
+    } catch {
+        # ignore logging errors
+    }
+}
 
-      $lowerLineForSearch = $line.ToLowerInvariant()
-      $idx = $lowerLineForSearch.IndexOf($needle)
-      if($idx -lt 0){ return $null }
+function Enqueue-Event {
+    Param(
+        [Parameter(Mandatory=$true)][string]$Type,
+        [Parameter(ValueFromRemainingArguments=$true)][object[]]$Args
+    )
+    $payload = [object[]]@($Type)
+    if($Args){ $payload += $Args }
+    $script:EventQueue.Enqueue($payload)
+}
 
-      $after = $line.Substring($idx + $needle.Length)
-      $after = [regex]::Replace($after,'[\u200B-\u200D\uFEFF]','')
-      $after = $after.Trim()
-      while($after.Length -gt 0 -and $JoinSeparatorString.Contains($after[0])){ $after = $after.Substring(1).TrimStart() }
+function Strip-ZeroWidth {
+    Param([string]$Text)
+    if([string]::IsNullOrEmpty($Text)){ return '' }
+    return [regex]::Replace($Text, '[\u200B-\u200D\uFEFF]', '')
+}
 
-      $placeholder = $null
-      if(-not [string]::IsNullOrWhiteSpace($after)){
-        $candidate = $after
-        $candidate = ([regex]::Split($candidate,'(?i)\b(displayName|name|userId)\b')[0])
-        $candidate = ($candidate.Split('(')[0]).Split('[')[0]
-        $candidate = ($candidate.Split('{')[0]).Split('<')[0]
-        $candidate = Normalize-JoinFragment $candidate
-        if(Is-PlaceholderName $candidate){ $placeholder = $candidate }
-      }
+function Normalize-JoinFragment {
+    Param([string]$Text)
+    $clean = Strip-ZeroWidth($Text)
+    if(-not $clean){ return '' }
+    $clean = $clean -replace '\u3000', ' '
+    $clean = $clean.Trim()
+    $clean = $clean.Trim('"').Trim("'").Trim()
+    $clean = $clean -replace '\|\|', '|'
+    while($clean.Length -gt 0 -and $JoinSeparatorChars -contains $clean[0]){
+        $clean = $clean.Substring(1).TrimStart()
+    }
+    if($clean.Length -gt 160){ $clean = $clean.Substring(0,160).Trim() }
+    if([string]::IsNullOrEmpty($clean)){ return '' }
+    if($clean -match $JoinSeparatorOnlyPattern){ return '' }
+    return $clean
+}
 
-      $displayName = $null
-      $m = [regex]::Match($after,'(?i)displayName\s*[:=]\s*(?<name>[^,\]\)]+)')
-      if($m.Success){ $displayName = Normalize-JoinFragment $m.Groups['name'].Value }
+function Normalize-JoinName {
+    Param([string]$Text)
+    $clean = Normalize-JoinFragment($Text)
+    if([string]::IsNullOrEmpty($clean)){ return '' }
+    return $clean
+}
 
-      if(-not $displayName){
-        $m = [regex]::Match($after,'(?i)\bname\s*[:=]\s*(?<name>[^,\]\)]+)')
-        if($m.Success){ $displayName = Normalize-JoinFragment $m.Groups['name'].Value }
-      }
+function Is-PlaceholderName {
+    Param([string]$Name)
+    if([string]::IsNullOrWhiteSpace($Name)){ return $true }
+    $trimmed = $Name.Trim().ToLowerInvariant()
+    return @('player','you','someone','a player').Contains($trimmed)
+}
 
-      $userId = $null
-      $m = [regex]::Match($after,'(?i)\(usr_[^\)\s]+\)')
-      if($m.Success){ $userId = $m.Value.Trim('(',')').Trim() }
-      if(-not $userId){
-        $m = [regex]::Match($after,'(?i)userId\s*[:=]\s*(usr_[0-9a-f\-]+)')
-        if($m.Success){ $userId = $m.Groups[1].Value }
-      }
+function Get-ShortHash {
+    Param([string]$Text)
+    if([string]::IsNullOrEmpty($Text)){ return '' }
+    try {
+        $md5 = [System.Security.Cryptography.MD5]::Create()
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+            $hash = $md5.ComputeHash($bytes)
+            return ($hash[0..3] | ForEach-Object { $_.ToString('x2') }) -join ''
+        } finally {
+            $md5.Dispose()
+        }
+    } catch {
+        return ''
+    }
+}
 
-      if(-not $displayName){
+function Parse-PlayerEventLine {
+    Param(
+        [string]$Line,
+        [string]$EventToken = 'OnPlayerJoined'
+    )
+    if([string]::IsNullOrWhiteSpace($Line)){ return $null }
+    $lower = $Line.ToLowerInvariant()
+    $needle = $EventToken.ToLowerInvariant()
+    $index = $lower.IndexOf($needle)
+    if($index -lt 0){ return $null }
+    $after = Strip-ZeroWidth($Line.Substring($index + $needle.Length)).Trim()
+    while($after.Length -gt 0 -and $JoinSeparatorChars -contains $after[0]){
+        $after = $after.Substring(1).TrimStart()
+    }
+    $placeholder = ''
+    if($after){
+        $match = [regex]::Match($after, '(?i)\b(displayName|name|userId)\b')
+        if($match.Success){
+            $candidate = $after.Substring(0, $match.Index)
+        } else {
+            $candidate = $after
+        }
+        foreach($splitChar in @('(', '[', '{', '<')){
+            $parts = $candidate.Split($splitChar)
+            if($parts.Length -gt 0){ $candidate = $parts[0] }
+        }
+        $candidate = Normalize-JoinFragment($candidate)
+        if(Is-PlaceholderName($candidate)){
+            $placeholder = $candidate
+        }
+    }
+    $displayName = ''
+    $match = [regex]::Match($after, '(?i)displayName\s*[:=]\s*([^,\]\)]+)')
+    if($match.Success){
+        $displayName = Normalize-JoinFragment($match.Groups[1].Value)
+    }
+    if(-not $displayName){
+        $match = [regex]::Match($after, '(?i)\bname\s*[:=]\s*([^,\]\)]+)')
+        if($match.Success){
+            $displayName = Normalize-JoinFragment($match.Groups[1].Value)
+        }
+    }
+    $userId = ''
+    $match = [regex]::Match($after, '(?i)\(usr_[^\)\s]+\)')
+    if($match.Success){
+        $userId = $match.Value.Trim('(', ')', ' ')
+    }
+    if(-not $userId){
+        $match = [regex]::Match($after, '(?i)userId\s*[:=]\s*(usr_[0-9a-f\-]+)')
+        if($match.Success){
+            $userId = $match.Groups[1].Value
+        }
+    }
+    if(-not $displayName){
         $tmp = $after
         if($userId){
-          $tmp = $tmp -replace [regex]::Escape('(' + $userId + ')'), ''
+            $tmp = [regex]::Replace($tmp, [regex]::Escape("($userId)"), '', 'IgnoreCase')
         }
-        $tmp = [regex]::Replace($tmp,'\(usr_[^\)]*\)','')
-        $tmp = [regex]::Replace($tmp,'\(userId[^\)]*\)','')
-        $tmp = [regex]::Replace($tmp,'\[[^\]]*\]','')
-        $tmp = [regex]::Replace($tmp,'\{[^\}]*\}','')
-        $tmp = [regex]::Replace($tmp,'<[^>]*>','')
-        $tmp = $tmp -replace '\|\|','|'
-        $displayName = Normalize-JoinFragment $tmp
-      }
-
-      if(-not $displayName -and $userId){ $displayName = $userId }
-
-      return [pscustomobject]@{ Name=$displayName; UserId=$userId; Placeholder=$placeholder }
+        $tmp = [regex]::Replace($tmp, '(?i)\(usr_[^\)]*\)', '')
+        $tmp = [regex]::Replace($tmp, '(?i)\(userId[^\)]*\)', '')
+        $tmp = [regex]::Replace($tmp, '\[[^\]]*\]', '')
+        $tmp = [regex]::Replace($tmp, '\{[^\}]*\}', '')
+        $tmp = [regex]::Replace($tmp, '<[^>]*>', '')
+        $tmp = $tmp -replace '\|\|', '|'
+        $displayName = Normalize-JoinFragment($tmp)
     }
+    if(-not $displayName -and $userId){
+        $displayName = $userId
+    }
+    $safe = Strip-ZeroWidth($Line).Replace('||','|').Trim()
+    return [pscustomobject]@{
+        name        = $displayName
+        user_id     = $userId
+        placeholder = $placeholder
+        raw_line    = $safe
+    }
+}
 
-    # Detects world/instance transitions for the local player even when VRChat logs
-    # use localized phrases (e.g. Japanese) or alternative wording.
-    function Parse-RoomTransitionLine([string]$line){
-      if([string]::IsNullOrWhiteSpace($line)){ return $null }
-
-      $clean = [regex]::Replace($line,'[\u200B-\u200D\uFEFF]','')
-      $clean = $clean.Trim()
-      if([string]::IsNullOrWhiteSpace($clean)){ return $null }
-
-      $lower = $clean.ToLowerInvariant()
-
-      $jpRoomKey = -join @([char]0x30EB,[char]0x30FC,[char]0x30E0)
-      $jpInstanceKey = -join @([char]0x30A4,[char]0x30F3,[char]0x30B9,[char]0x30BF,[char]0x30F3,[char]0x30B9)
-      $jpJoinTerm = -join @([char]0x53C2,[char]0x52A0)
-      $jpCreateTerm = -join @([char]0x4F5C,[char]0x6210)
-      $jpEnterRoomTerm = -join @([char]0x5165,[char]0x5BA4)
-      $jpMoveTerm = -join @([char]0x79FB,[char]0x52D5)
-      $jpEnterHallTerm = -join @([char]0x5165,[char]0x5834)
-
-      $indicators = @(
-        'joining or creating room',
-        'entering room',
-        'joining room',
-        'creating room',
-        'created room',
-        'rejoining room',
-        're-joining room',
-        'reentering room',
-        're-entering room',
-        'joining instance',
-        'creating instance',
-        'entering instance'
-      )
-
-      $matched = $false
-      foreach($indicator in $indicators){
-        if($lower.Contains($indicator)){
-          $matched = $true
-          break
-        }
-      }
-
-      if(-not $matched){
+function Parse-RoomTransitionLine {
+    Param([string]$Line)
+    if([string]::IsNullOrWhiteSpace($Line)){ return $null }
+    $clean = Strip-ZeroWidth($Line).Trim()
+    if(-not $clean){ return $null }
+    $lower = $clean.ToLowerInvariant()
+    $indicators = @(
+        'joining or creating room', 'entering room', 'joining room', 'creating room',
+        'created room', 'rejoining room', 're-joining room', 'reentering room',
+        're-entering room', 'joining instance', 'creating instance', 'entering instance'
+    )
+    $matched = $false
+    foreach($indicator in $indicators){
+        if($lower.Contains($indicator)){ $matched = $true; break }
+    }
+    if(-not $matched){
         $jpSets = @(
-          @{ Key=$jpRoomKey; Terms=@($jpJoinTerm,$jpCreateTerm,$jpEnterRoomTerm,$jpMoveTerm,$jpEnterHallTerm) },
-          @{ Key=$jpInstanceKey; Terms=@($jpJoinTerm,$jpCreateTerm,$jpEnterRoomTerm,$jpMoveTerm,$jpEnterHallTerm) }
+            @{ key = 'ルーム'; terms = @('参加','作成','入室','移動','入場') },
+            @{ key = 'インスタンス'; terms = @('参加','作成','入室','移動','入場') }
         )
-        foreach($set in $jpSets){
-          if($clean.Contains($set.Key)){
-            foreach($term in $set.Terms){
-              if($clean.Contains($term)){
+        foreach($jp in $jpSets){
+            if($clean.Contains($jp.key)){
+                foreach($term in $jp.terms){
+                    if($clean.Contains($term)){ $matched = $true; break }
+                }
+            }
+            if($matched){ break }
+        }
+    }
+    if(-not $matched){
+        if([regex]::IsMatch($clean, '(?i)wrld_[0-9a-f\-]+')){
+            if($lower.Contains('room') -or $lower.Contains('instance') -or $clean.Contains('インスタンス') -or $clean.Contains('ルーム')){
                 $matched = $true
-                break
-              }
             }
-          }
-          if($matched){ break }
         }
-      }
-
-      if(-not $matched){
-        if($clean -match '(?i)\bwrld_[0-9a-f\-]+\b'){
-          $hasJapaneseRoomWord = $clean.Contains($jpRoomKey) -or $clean.Contains($jpInstanceKey)
-
-          if($lower.Contains('room') -or $lower.Contains('instance') -or $hasJapaneseRoomWord){
-            $matched = $true
-          }
-        }
-      }
-
-      if(-not $matched){ return $null }
-
-      $worldId = ''
-      $instanceId = ''
-
-      $worldMatch = [regex]::Match($clean,'wrld_[0-9a-f\-]+','IgnoreCase')
-      if($worldMatch.Success){
-        $worldId = $worldMatch.Value
-
-        $afterWorld = ''
-        try{ $afterWorld = $clean.Substring($worldMatch.Index + $worldMatch.Length) }catch{ $afterWorld = '' }
-
-        if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
-          $afterWorld = $afterWorld.TrimStart(':',' ','`t','-')
-          if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
-            $instMatch = [regex]::Match($afterWorld,'^[^\s,]+')
-            if($instMatch.Success){ $instanceId = $instMatch.Value }
-          }
-        }
-      }
-
-      if([string]::IsNullOrWhiteSpace($instanceId)){
-        $instAlt = [regex]::Match($clean,'(?i)instance\s*[:=]\s*([^\s,]+)')
-        if($instAlt.Success){ $instanceId = $instAlt.Groups[1].Value }
-      }
-
-      return [pscustomobject]@{ World=$worldId; Instance=$instanceId; RawLine=$clean }
     }
-
-    $reSelf = [regex]'(?i)\[Behaviour\].*OnJoinedRoom\b'
-    $reJoin = [regex]'(?i)\[Behaviour\].*OnPlayerJoined\b'
-    $reLeave = [regex]'(?i)\[Behaviour\].*OnPlayerLeft\b'
-
-    $logPath = Normalize-LogPath $InitialLogPath
-    $lastSize = 0L
-    if($logPath){
-      $info = Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue
-      if($info){ $lastSize = $info.Length } else { $lastSize = 0L }
+    if(-not $matched){ return $null }
+    $world = ''
+    $instance = ''
+    $match = [regex]::Match($clean, '(?i)wrld_[0-9a-f\-]+')
+    if($match.Success){
+        $world = $match.Value
+        $after = $clean.Substring($match.Index + $match.Length).TrimStart(':',' ','`t','-')
+        if($after){
+            $instMatch = [regex]::Match($after, '^[^\s,]+')
+            if($instMatch.Success){ $instance = $instMatch.Value }
+        }
     }
-
-    while($true){
-      $maybe = Get-Newest $LogDir
-      if($maybe){
-        $maybe = Normalize-LogPath $maybe
-        $isSame = $false
-        if($maybe -and $logPath){
-          $isSame = [string]::Equals($maybe,$logPath,[System.StringComparison]::OrdinalIgnoreCase)
-        }
-        if(-not $isSame){
-          $logPath = $maybe
-          $info = $null
-          if($logPath){ $info = Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue }
-          if($info){ $lastSize = $info.Length } else { $lastSize = 0L }
-          if($logPath){ Write-Output ("SWITCHED||" + $logPath) }
-          Start-Sleep -Milliseconds 200
-          continue
-        }
-      }
-
-      if(-not $logPath -or -not(Test-Path $logPath)){ Start-Sleep -Milliseconds 800; continue }
-
-      $info = Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue
-      if(-not $info){ Start-Sleep -Milliseconds 800; continue }
-
-      if($info.Length -lt $lastSize){ $lastSize = 0L }
-
-      $fs=[System.IO.File]::Open($info.FullName,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::ReadWrite)
-      try{
-        $sr=New-Object System.IO.StreamReader($fs)
-        $fs.Seek($lastSize,[System.IO.SeekOrigin]::Begin) | Out-Null
-        while(-not $sr.EndOfStream){
-          $line=$sr.ReadLine()
-
-          if([string]::IsNullOrWhiteSpace($line)){ continue }
-
-          $lowerLine = $line.ToLowerInvariant()
-
-          if($lowerLine.Contains('onleftroom')){
-            $safeLine = $line -replace '\|\|','|'
-            Write-Output ("ROOM_EVENT||LEFT||||" + $safeLine)
-            continue
-          }
-
-          $roomEvent = Parse-RoomTransitionLine $line
-          if($roomEvent){
-            $safeWorld = $roomEvent.World -replace '\|\|','|'
-            $safeInstance = $roomEvent.Instance -replace '\|\|','|'
-            $safeLine = $roomEvent.RawLine -replace '\|\|','|'
-            Write-Output ("ROOM_EVENT||ENTER||" + $safeWorld + "||" + $safeInstance + "||" + $safeLine)
-            continue
-          }
-
-          if($reSelf.IsMatch($line)){
-            Write-Output ("SELF_JOIN||" + $line)
-            continue
-          }
-          if($reLeave.IsMatch($line)){
-            $parsedLeave = Parse-PlayerEventLine $line 'OnPlayerLeft'
-            $leaveName = ''
-            $leaveUserId = ''
-            if($parsedLeave){
-              if($parsedLeave.Name){ $leaveName = $parsedLeave.Name }
-              if($parsedLeave.UserId){ $leaveUserId = $parsedLeave.UserId }
-            }
-            $safeLeaveName = ($leaveName -replace '\|\|','|')
-            $safeLeaveUser = ($leaveUserId -replace '\|\|','|')
-            Write-Output ("PLAYER_LEAVE||" + $safeLeaveName + "||" + $safeLeaveUser + "||" + $line)
-            continue
-          }
-
-          if($reJoin.IsMatch($line)){
-            $parsed = Parse-PlayerEventLine $line 'OnPlayerJoined'
-            $name = ''
-            $userId = ''
-            $placeholder = ''
-            if($parsed){
-              if($parsed.Name){ $name = $parsed.Name }
-              if($parsed.UserId){ $userId = $parsed.UserId }
-              if($parsed.Placeholder){ $placeholder = $parsed.Placeholder }
-            }
-            $safeName = ($name -replace '\|\|','|')
-            $safeUser = ($userId -replace '\|\|','|')
-            $safePlaceholder = ($placeholder -replace '\|\|','|')
-            Write-Output ("PLAYER_JOIN||" + $safeName + "||" + $safeUser + "||" + $safePlaceholder + "||" + $line)
-            continue
-          }
-        }
-        $lastSize=$fs.Length
-      }finally{ $sr.Close(); $fs.Close() }
-
-      Start-Sleep -Milliseconds 600
+    if(-not $instance){
+        $instAlt = [regex]::Match($clean, '(?i)instance\s*[:=]\s*([^\s,]+)')
+        if($instAlt.Success){ $instance = $instAlt.Groups[1].Value }
     }
-  } -ArgumentList $firstLog,$global:Cfg.VRChatLogDir
+    return [pscustomobject]@{
+        world    = $world
+        instance = $instance
+        raw_line = $clean
+    }
 }
-function Process-FollowOutput {
-  if (-not $global:FollowJob) { return }
-  try{
-    $out = Receive-Job -Id $global:FollowJob.Id -ErrorAction SilentlyContinue
-    if(-not $out){ return }
-    foreach($s in $out){
-      if($s -isnot [string]){ continue }
 
-      if($s.StartsWith('SWITCHED||')){
-        $p=$s.Substring(10)
-        Write-AppLog ("Switching to newest log: " + $p)
-        Reset-SessionState
-        if($global:TrayIcon){
-          $global:IdleTooltip = $AppName
-          try{ $global:TrayIcon.Text = $global:IdleTooltip }catch{}
+function Is-VRChatRunning {
+    try {
+        return @(Get-Process -Name 'VRChat' -ErrorAction SilentlyContinue).Count -gt 0
+    } catch {
+        return $false
+    }
+}
+
+function Score-LogFile {
+    Param([string]$Path)
+    try {
+        $info = Get-Item -LiteralPath $Path -ErrorAction Stop
+    } catch {
+        return 0.0
+    }
+    $best = [double]([DateTimeOffset]$info.LastWriteTimeUtc).ToUnixTimeSeconds()
+    $created = [double]([DateTimeOffset]$info.CreationTimeUtc).ToUnixTimeSeconds()
+    if($created -gt $best){ $best = $created }
+    $match = [regex]::Match([System.IO.Path]::GetFileName($Path), 'output_log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.txt$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if($match.Success){
+        try {
+            $dt = Get-Date -Year $match.Groups[1].Value -Month $match.Groups[2].Value -Day $match.Groups[3].Value -Hour $match.Groups[4].Value -Minute $match.Groups[5].Value -Second $match.Groups[6].Value
+            $stamp = [double]([DateTimeOffset]$dt.ToUniversalTime()).ToUnixTimeSeconds()
+            if($stamp -gt $best){ $best = $stamp }
+        } catch {}
+    }
+    return $best
+}
+
+function Get-NewestLogPath {
+    Param([string]$LogDir)
+    if([string]::IsNullOrWhiteSpace($LogDir)){ return $null }
+    if(-not (Test-Path -Path $LogDir -PathType Container)){ return $null }
+    try {
+        $candidates = Get-ChildItem -Path $LogDir -File -ErrorAction Stop | Where-Object {
+            $_.Name -ieq 'player.log' -or $_.Name -like 'output_log_*'
         }
-        continue
-      }
+    } catch {
+        return $null
+    }
+    if(-not $candidates){ return $null }
+    $sorted = $candidates | Sort-Object { Score-LogFile $_.FullName } -Descending
+    return $sorted[0].FullName
+}
+function Reset-SessionState {
+    $script:Session.Ready = $false
+    $script:Session.Source = ''
+    $script:Session.SeenPlayers = @{}
+    $script:Session.SessionStartedAt = $null
+    $script:Session.SessionLastJoinAt = $null
+    $script:Session.SessionLastJoinRaw = $null
+    $script:Session.PendingRoom = $null
+    $script:Session.PendingSelfJoin = $null
+    $script:Session.LocalUserId = $null
+}
 
-      if($s.StartsWith('ROOM_EVENT||')){
-        $parts=$s.Split('||',5)
-        $eventType=''
-        if($parts.Length -ge 2){ $eventType = $parts[1] }
-        $worldId=''
-        if($parts.Length -ge 3){ $worldId = $parts[2] }
-        $instanceId=''
-        if($parts.Length -ge 4){ $instanceId = $parts[3] }
-        $rawRoomLine=''
-        if($parts.Length -ge 5){ $rawRoomLine = $parts[4] }
-
-        if($eventType -eq 'LEFT'){
-          if($script:SessionReady){
-            Write-AppLog ("Session " + $script:SessionId + " ended (OnLeftRoom detected).")
-          }else{
-            Write-AppLog 'OnLeftRoom detected.'
-          }
-          Reset-SessionState
-          if($global:TrayIcon){
-            $global:IdleTooltip = $AppName
-            try{ $global:TrayIcon.Text = $global:IdleTooltip }catch{}
-          }
-          continue
+function Ensure-SessionReady {
+    Param([string]$Reason)
+    if($script:Session.Ready){ return $false }
+    if([string]::IsNullOrWhiteSpace($Reason)){ $Reason = 'unknown trigger' }
+    $script:Session.SessionId++
+    $script:Session.Ready = $true
+    $script:Session.Source = $Reason
+    $script:Session.SeenPlayers = @{}
+    $script:Session.SessionStartedAt = [DateTime]::UtcNow
+    $script:Session.SessionLastJoinAt = $null
+    $script:Session.SessionLastJoinRaw = $null
+    $roomDesc = $null
+    if($script:Session.PendingRoom){
+        $world = [string]$script:Session.PendingRoom.world
+        $instance = [string]$script:Session.PendingRoom.instance
+        if($world){
+            $roomDesc = $world
+            if($instance){ $roomDesc += ":$instance" }
         }
+    }
+    $message = "Session $($script:Session.SessionId) started ($Reason)"
+    if($roomDesc){ $message += " [$roomDesc]" }
+    $message += '.'
+    Write-AppLog $message
+    return $true
+}
 
-        if($eventType -eq 'ENTER'){
-          Reset-SessionState
-          $roomInfo = [pscustomobject]@{ World=$worldId; Instance=$instanceId; Raw=$rawRoomLine }
-          $script:PendingRoom = $roomInfo
-          $roomDesc = $null
-          if(-not [string]::IsNullOrWhiteSpace($worldId)){
-            $roomDesc = $worldId
-            if(-not [string]::IsNullOrWhiteSpace($instanceId)){ $roomDesc += ":" + $instanceId }
-          }
-          if($roomDesc){
-            Write-AppLog ("Room transition detected: " + $roomDesc)
-          }elseif(-not [string]::IsNullOrWhiteSpace($rawRoomLine)){
-            Write-AppLog ("Room transition detected: " + $rawRoomLine)
-          }else{
-            Write-AppLog 'Room transition detected.'
-          }
-          if($global:TrayIcon){
-            $tip = $AppName
-            if($roomDesc){ $tip = "$AppName $EmDash $roomDesc" }
-            $global:IdleTooltip = $tip
-            try{ $global:TrayIcon.Text = $tip }catch{}
-          }
-          continue
+function Notify-All {
+    Param(
+        [string]$Key,
+        [string]$Title,
+        [string]$Message,
+        [bool]$Desktop = $true
+    )
+    $now = [DateTime]::UtcNow
+    $previous = $null
+    if($script:Session.LastNotified.ContainsKey($Key)){
+        $previous = $script:Session.LastNotified[$Key]
+    }
+    if($previous){
+        if(($now - $previous).TotalSeconds -lt $NotifyCooldownSeconds){
+            Write-AppLog "Suppressed '$Key' within cooldown."
+            return
         }
+    }
+    $script:Session.LastNotified[$Key] = $now
+    if($Desktop){ Send-DesktopNotification $Title $Message }
+    Send-PushoverNotification $Title $Message
+}
 
-        continue
-      }
+function Handle-LogSwitch {
+    Param([string]$Path)
+    Write-AppLog "Switching to newest log: $Path"
+    Reset-SessionState
+}
 
-      if(-not (Is-VRChatRunning)) { continue }
+function Handle-RoomEnter {
+    Param([pscustomobject]$Info)
+    $world = [string]$Info.world
+    $instance = [string]$Info.instance
+    $raw = [string]$Info.raw_line
+    $script:Session.PendingRoom = $Info
+    if($world){
+        $desc = $world
+        if($instance){ $desc += ":$instance" }
+        Write-AppLog "Room transition detected: $desc"
+    } elseif($raw){
+        Write-AppLog "Room transition detected: $raw"
+    } else {
+        Write-AppLog 'Room transition detected.'
+    }
+}
 
-      if($s.StartsWith('SELF_JOIN||')){
-        $selfParts = $s.Split('||',2)
-        $rawSelfLine = ''
-        if($selfParts.Length -ge 2){ $rawSelfLine = $selfParts[1] }
-        $now = Get-Date
-        $reuseFallback = $false
-        $elapsedSinceFallback = $null
-        $lastJoinGap = $null
-        $fallbackJoinCount = 0
+function Handle-RoomLeft {
+    if($script:Session.Ready){
+        Write-AppLog "Session $($script:Session.SessionId) ended (OnLeftRoom detected.)"
+    } else {
+        Write-AppLog 'OnLeftRoom detected.'
+    }
+    Reset-SessionState
+}
 
-        if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
-          $fallbackJoinCount = $script:SeenPlayers.Count
-
-          if($script:SessionStartedAt){
-            try{ $elapsedSinceFallback = $now - $script:SessionStartedAt }catch{ $elapsedSinceFallback = $null }
-          }
-
-          if($fallbackJoinCount -gt 0){
-            $lastJoinAt = $script:SessionLastJoinAt
-            if(-not $lastJoinAt){
-              try{ $lastJoinAt = ($script:SeenPlayers.Values | Sort-Object -Descending | Select-Object -First 1) }catch{ $lastJoinAt = $null }
+function Handle-SelfJoin {
+    Param([string]$RawLine)
+    if(-not (Is-VRChatRunning)){
+        Write-AppLog 'Ignored self join while VRChat is not running.'
+        return
+    }
+    $now = [DateTime]::UtcNow
+    $reuseFallback = $false
+    $elapsedSinceFallback = $null
+    $lastJoinGap = $null
+    $fallbackJoinCount = 0
+    if($script:Session.Ready -and $script:Session.Source -eq 'OnPlayerJoined fallback'){
+        $fallbackJoinCount = $script:Session.SeenPlayers.Count
+        if($script:Session.SessionStartedAt){
+            $elapsedSinceFallback = $now - $script:Session.SessionStartedAt
+        }
+        if($fallbackJoinCount -gt 0){
+            $lastJoin = $script:Session.SessionLastJoinAt
+            if(-not $lastJoin -and $script:Session.SeenPlayers.Count -gt 0){
+                $lastJoin = ($script:Session.SeenPlayers.Values | Sort-Object -Descending | Select-Object -First 1)
             }
-            if($lastJoinAt){
-              try{ $lastJoinGap = $now - $lastJoinAt }catch{ $lastJoinGap = $null }
-            }
-          }
-
-          $withinGrace = ($null -ne $elapsedSinceFallback -and $elapsedSinceFallback.TotalSeconds -lt $SessionFallbackGraceSeconds)
-          $withinJoinGap = $false
-          if($withinGrace){
+            if($lastJoin){ $lastJoinGap = $now - $lastJoin }
+        }
+        $withinGrace = $false
+        if($elapsedSinceFallback){
+            $withinGrace = $elapsedSinceFallback.TotalSeconds -lt $SessionFallbackGraceSeconds
+        }
+        $withinJoinGap = $false
+        if($withinGrace){
             if($fallbackJoinCount -le 0){
-              $withinJoinGap = $true
-            }elseif($lastJoinGap){
-              $withinJoinGap = ($lastJoinGap.TotalSeconds -le $SessionFallbackMaxContinuationSeconds)
+                $withinJoinGap = $true
+            } elseif($lastJoinGap){
+                $withinJoinGap = $lastJoinGap.TotalSeconds -le $SessionFallbackMaxContinuationSeconds
             }
-          }
-
-          if($withinGrace -and $withinJoinGap){
+        }
+        if($withinGrace -and $withinJoinGap){
             $reuseFallback = $true
-            $script:SessionSource = 'OnJoinedRoom'
-
-            $logParts = @()
+            $script:Session.Source = 'OnJoinedRoom'
+            $details = @()
+            if($lastJoinGap){ $details += "last join gap $([Math]::Round([Math]::Max(0.0,$lastJoinGap.TotalSeconds),1))s" }
+            elseif($fallbackJoinCount -gt 0){ $details += 'last join gap unknown' }
+            if($fallbackJoinCount -gt 0){ $details += "tracked players $fallbackJoinCount" }
+            $detailText = if($details){ ' (' + ($details -join '; ') + ')' } else { '' }
+            Write-AppLog "Session $($script:Session.SessionId) confirmed by OnJoinedRoom.$detailText"
+        }
+    }
+    if(-not $reuseFallback){
+        $details = @()
+        if($elapsedSinceFallback){
+            $details += "after $([Math]::Round([Math]::Max(0.0,$elapsedSinceFallback.TotalSeconds),1))s"
+        }
+        if($fallbackJoinCount -gt 0){
             if($lastJoinGap){
-              $gapSeconds = [Math]::Round([Math]::Max(0,$lastJoinGap.TotalSeconds),1)
-              $logParts += ("last join gap " + $gapSeconds + 's')
-            }elseif($fallbackJoinCount -gt 0){
-              $logParts += 'last join gap unknown'
+                $details += "last join gap $([Math]::Round([Math]::Max(0.0,$lastJoinGap.TotalSeconds),1))s"
+            } else {
+                $details += 'last join gap unavailable'
             }
-            if($fallbackJoinCount -gt 0){ $logParts += ("tracked players " + $fallbackJoinCount) }
-
-            $detail = ''
-            if($logParts.Count -gt 0){ $detail = ' (' + ($logParts -join '; ') + ')' }
-            Write-AppLog ("Session " + $script:SessionId + " confirmed by OnJoinedRoom." + $detail)
-          }
+            $details += "tracked players $fallbackJoinCount"
         }
+        if($script:Session.Ready -and $script:Session.Source -eq 'OnPlayerJoined fallback'){
+            $detailText = if($details){ ' (' + ($details -join '; ') + ')' } else { '' }
+            Write-AppLog "Session $($script:Session.SessionId) fallback expired$detailText; starting new session for OnJoinedRoom."
+        }
+        $pending = $script:Session.PendingRoom
+        Reset-SessionState
+        if($pending){ $script:Session.PendingRoom = $pending }
+        Ensure-SessionReady 'OnJoinedRoom'
+    }
+    $parsedName = ''
+    $parsedUser = ''
+    $parsedPlaceholder = ''
+    if($RawLine){
+        $parsed = Parse-PlayerEventLine -Line $RawLine -EventToken 'OnJoinedRoom'
+        if($parsed){
+            $parsedName = Normalize-JoinName $parsed.name
+            $parsedUser = ([string]$parsed.user_id).Trim()
+            $parsedPlaceholder = Normalize-JoinName $parsed.placeholder
+        }
+    }
+    if($parsedUser){
+        $lower = $parsedUser.ToLowerInvariant()
+        if(-not $script:Session.LocalUserId -or $script:Session.LocalUserId -ne $lower){
+            $script:Session.LocalUserId = $lower
+            Write-AppLog "Learned local userId from OnJoinedRoom event: $parsedUser"
+        }
+    }
+    $displayName = if($parsedName){ $parsedName } elseif($parsedUser){ $parsedUser } else { 'You' }
+    $placeholderLabel = if($parsedPlaceholder){ $parsedPlaceholder } else { 'Player' }
+    if(($placeholderLabel).ToLowerInvariant() -eq 'you'){ $placeholderLabel = 'Player' }
+    if($displayName.ToLowerInvariant() -eq 'you' -and $parsedName){ $displayName = $parsedName }
+    $messageBase = $displayName
+    if($placeholderLabel){
+        if(-not $messageBase){ $messageBase = $placeholderLabel }
+        else { $messageBase = "$messageBase($placeholderLabel)" }
+    }
+    if(-not $messageBase){ $messageBase = 'You' }
+    $message = "$messageBase joined your instance."
+    $key = "self:$($script:Session.SessionId)"
+    Notify-All $key $AppName $message
+    $script:Session.PendingSelfJoin = @{
+        session_id = $script:Session.SessionId
+        placeholder = $placeholderLabel
+        timestamp = $now
+    }
+}
 
-        if(-not $reuseFallback){
-          if($script:SessionReady -and ($script:SessionSource -eq 'OnPlayerJoined fallback')){
-            $detailParts = @()
-            if($null -ne $elapsedSinceFallback){
-              $seconds = [Math]::Round([Math]::Max(0,$elapsedSinceFallback.TotalSeconds),1)
-              $detailParts += ("after " + $seconds + 's')
+function Handle-PlayerJoin {
+    Param(
+        [string]$Name,
+        [string]$UserId,
+        [string]$RawLine,
+        [string]$Placeholder
+    )
+    if(-not (Is-VRChatRunning)){
+        Write-AppLog 'Ignored player join while VRChat is not running.'
+        return
+    }
+    if(-not $script:Session.Ready){ Ensure-SessionReady 'OnPlayerJoined fallback' }
+    if(-not $script:Session.Ready){ return }
+    $eventTime = [DateTime]::UtcNow
+    $script:Session.SessionLastJoinAt = $eventTime
+    $script:Session.SessionLastJoinRaw = $RawLine
+    $cleanName = Normalize-JoinName $Name
+    $originalName = $cleanName
+    $cleanPlaceholder = Normalize-JoinName $Placeholder
+    $cleanUser = ([string]$UserId).Trim()
+    $userKey = if($cleanUser){ $cleanUser.ToLowerInvariant() } else { '' }
+    if($userKey -and $script:Session.LocalUserId -and $userKey -eq $script:Session.LocalUserId){
+        Write-AppLog "Skipping join for known local userId '$cleanUser'."
+        $script:Session.PendingSelfJoin = $null
+        return
+    }
+    $pendingSelf = $script:Session.PendingSelfJoin
+    if($pendingSelf -and $pendingSelf.session_id -eq $script:Session.SessionId){
+        $pendingPlaceholder = Normalize-JoinName ([string]$pendingSelf.placeholder)
+        $pendingLower = if($pendingPlaceholder){ $pendingPlaceholder.ToLowerInvariant() } else { '' }
+        $eventPlaceholderLower = if($cleanPlaceholder){ $cleanPlaceholder.ToLowerInvariant() } else { '' }
+        if(-not $eventPlaceholderLower -and (Is-PlaceholderName $originalName)){
+            $eventPlaceholderLower = $originalName.ToLowerInvariant()
+        }
+        $timestamp = $pendingSelf.timestamp
+        $ageOk = $false
+        if($timestamp -and $timestamp -is [DateTime]){
+            $ageOk = ($eventTime - $timestamp).TotalSeconds -lt 10
+        }
+        if(
+            $ageOk -and $pendingLower -in @('player','you') -and (
+                $pendingLower -eq $eventPlaceholderLower -or (
+                    -not $eventPlaceholderLower -and (Is-PlaceholderName $originalName)
+                )
+            )
+        ){
+            if($userKey -and -not $script:Session.LocalUserId){
+                $script:Session.LocalUserId = $userKey
             }
-            if($fallbackJoinCount -gt 0){
-              if($lastJoinGap){
-                $gapSeconds = [Math]::Round([Math]::Max(0,$lastJoinGap.TotalSeconds),1)
-                $detailParts += ("last join gap " + $gapSeconds + 's')
-              }else{
-                $detailParts += 'last join gap unavailable'
-              }
-              $detailParts += ("tracked players " + $fallbackJoinCount)
-            }
-            $detail = ''
-            if($detailParts.Count -gt 0){ $detail = ' (' + ($detailParts -join '; ') + ')' }
-            Write-AppLog ("Session " + $script:SessionId + " fallback expired" + $detail + "; starting new session for OnJoinedRoom.")
-          }
-          $pendingRoomInfo = $script:PendingRoom
-          Reset-SessionState
-          if($pendingRoomInfo){ $script:PendingRoom = $pendingRoomInfo }
-          [void](Ensure-SessionReady('OnJoinedRoom'))
+            $script:Session.PendingSelfJoin = $null
+            Write-AppLog 'Skipping join matched pending self event.'
+            return
         }
-
-        $selfName = $null
-        $selfUserId = $null
-        $selfPlaceholder = $null
-        if(-not [string]::IsNullOrWhiteSpace($rawSelfLine)){
-          $parsedSelf = Parse-PlayerEventLine $rawSelfLine 'OnJoinedRoom'
-          if($parsedSelf){
-            if($parsedSelf.Name){ $selfName = Normalize-JoinName $parsedSelf.Name }
-            if($parsedSelf.UserId){
-              $selfUserId = $parsedSelf.UserId
-              $userKey = $selfUserId.ToLowerInvariant()
-              if(-not $script:LocalUserId -or $script:LocalUserId -ne $userKey){
-                $script:LocalUserId = $userKey
-                Write-AppLog ("Learned local userId from OnJoinedRoom event: " + $selfUserId)
-              }
-            }
-            if($parsedSelf.Placeholder){ $selfPlaceholder = Normalize-JoinName $parsedSelf.Placeholder }
-          }
+    }
+    $wasPlaceholder = Is-PlaceholderName $cleanName
+    $isFallback = $script:Session.Source -eq 'OnPlayerJoined fallback'
+    if($wasPlaceholder -and $userKey){
+        if($isFallback -and -not $script:Session.LocalUserId){
+            $script:Session.LocalUserId = $userKey
+            Write-AppLog "Learned local userId from join event: $cleanUser"
+            Write-AppLog "Skipping initial local join placeholder for userId '$cleanUser'."
+            $script:Session.PendingSelfJoin = $null
+            return
         }
-        if(-not $selfName -and $selfUserId){ $selfName = $selfUserId }
-        $displayName = if($selfName){ $selfName } else { 'You' }
-        $placeholderLabel = $selfPlaceholder
-        if([string]::IsNullOrWhiteSpace($placeholderLabel)){ $placeholderLabel = 'Player' }
-        elseif($placeholderLabel.ToLowerInvariant() -eq 'you'){ $placeholderLabel = 'Player' }
-        if($displayName.ToLowerInvariant() -eq 'you' -and $selfName){ $displayName = $selfName }
-        $messageName = $displayName
-        if(-not [string]::IsNullOrWhiteSpace($placeholderLabel)){
-          if([string]::IsNullOrWhiteSpace($messageName)){ $messageName = $placeholderLabel }
-          else{ $messageName = $messageName + '(' + $placeholderLabel + ')' }
+        if($script:Session.LocalUserId -and $script:Session.LocalUserId -eq $userKey){
+            Write-AppLog "Skipping local join placeholder for userId '$cleanUser'."
+            $script:Session.PendingSelfJoin = $null
+            return
         }
-        $message = $messageName + ' joined your instance.'
-        Notify-All ("self:" + $script:SessionId) $AppName $message
-        $script:PendingSelfJoin = [pscustomobject]@{
-          SessionId = $script:SessionId
-          Placeholder = $placeholderLabel
-          Timestamp = $now
-        }
-        continue
-      }
+    }
+    if(-not $cleanName -and $cleanUser){
+        $cleanName = $cleanUser
+        $wasPlaceholder = $false
+    } elseif($wasPlaceholder -and $cleanUser){
+        $cleanName = $cleanUser
+        $wasPlaceholder = $false
+    }
+    if(-not $cleanName){ $cleanName = 'Unknown VRChat user' }
+    $keyBase = if($userKey){ $userKey } else { $cleanName.ToLowerInvariant() }
+    $hashSuffix = ''
+    if(-not $cleanUser -and $RawLine){ $hashSuffix = Get-ShortHash $RawLine }
+    $joinKey = "join:$($script:Session.SessionId):$keyBase"
+    if($hashSuffix){ $joinKey += ":$hashSuffix" }
+    if($script:Session.SeenPlayers.ContainsKey($joinKey)){ return }
+    $script:Session.SeenPlayers[$joinKey] = $eventTime
+    $placeholderForMessage = $cleanPlaceholder
+    if(-not $placeholderForMessage -and $wasPlaceholder){ $placeholderForMessage = $originalName }
+    if(-not $placeholderForMessage){ $placeholderForMessage = 'Someone' }
+    elseif($placeholderForMessage.ToLowerInvariant() -eq 'you'){ $placeholderForMessage = 'Player' }
+    $messageName = $cleanName
+    if($cleanName){ $messageName = "$cleanName($placeholderForMessage)" }
+    else { $messageName = $placeholderForMessage }
+    $desktopNotification = $true
+    if($wasPlaceholder -and -not $cleanUser){
+        $placeholderLower = ($placeholderForMessage).Trim().ToLowerInvariant()
+        if($placeholderLower -eq 'a player'){ $desktopNotification = $false }
+    }
+    $message = "$messageName joined your instance."
+    Notify-All $joinKey $AppName $message $desktopNotification
+    $logLine = "Session $($script:Session.SessionId): player joined '$cleanName'"
+    if($cleanUser){ $logLine += " ($cleanUser)" }
+    $logLine += '.'
+    Write-AppLog $logLine
+}
 
-      if($s.StartsWith('PLAYER_LEAVE||')){
-        if(-not $script:SessionReady){ continue }
-        $parts=$s.Split('||',4)
-        $rawName = ''
-        $rawUserId = ''
-        $rawLine = ''
-        if($parts.Length -ge 2){ $rawName = $parts[1] }
-        if($parts.Length -ge 4){
-          $rawUserId = $parts[2]
-          $rawLine = $parts[3]
-        }elseif($parts.Length -ge 3){
-          $rawLine = $parts[2]
-        }
-
-        $name = Normalize-JoinName $rawName
-
-        $userId = $null
-        if(-not [string]::IsNullOrWhiteSpace($rawUserId)){
-          $tmpUser = [regex]::Replace($rawUserId,'[\u200B-\u200D\uFEFF]','').Trim()
-          if(-not [string]::IsNullOrWhiteSpace($tmpUser)){ $userId = $tmpUser }
-        }
-
-        $userKey = $null
-        if($userId){ $userKey = $userId.ToLowerInvariant() }
-
-        $isPlaceholder = Is-PlaceholderName $name
-        if($isPlaceholder -and $userKey){
-          if(-not $script:LocalUserId){
-            $script:LocalUserId = $userKey
-            Write-AppLog ("Learned local userId from leave event: " + $userId)
-          }elseif($script:LocalUserId -eq $userKey){
-            $name = $userId
+function Handle-PlayerLeft {
+    Param(
+        [string]$Name,
+        [string]$UserId,
+        [string]$RawLine
+    )
+    $cleanName = Normalize-JoinName $Name
+    $cleanUser = ([string]$UserId).Trim()
+    $userKey = if($cleanUser){ $cleanUser.ToLowerInvariant() } else { '' }
+    $isPlaceholder = Is-PlaceholderName $cleanName
+    if($isPlaceholder -and $userKey){
+        if(-not $script:Session.LocalUserId){
+            $script:Session.LocalUserId = $userKey
+            Write-AppLog "Learned local userId from leave event: $cleanUser"
+        } elseif($script:Session.LocalUserId -eq $userKey){
+            $cleanName = $cleanUser
             $isPlaceholder = $false
-          }
         }
-
-        if(-not $name -and $userId){ $name = $userId; $isPlaceholder = $false }
-        if(-not $name){ $name = 'Unknown VRChat user' }
-
-        $removedCount = 0
-        if($userKey){
-          $keyPrefix = "join:{0}:{1}" -f $script:SessionId,$userKey
-          $keysToRemove = @()
-          foreach($existingKey in @($script:SeenPlayers.Keys)){
-            if($existingKey.StartsWith($keyPrefix)){
-              $keysToRemove += $existingKey
-            }
-          }
-          foreach($keyToRemove in $keysToRemove){
-            if($script:SeenPlayers.ContainsKey($keyToRemove)){
-              $null = $script:SeenPlayers.Remove($keyToRemove)
-              $removedCount++
-            }
-          }
-        }
-
-        $logLine = "Session {0}: player left '{1}'" -f $script:SessionId,$name
-        if($userId){ $logLine += " (" + $userId + ")" }
-        if($removedCount -gt 0){
-          $logLine += ' [cleared join tracking]'
-        }
-        $logLine += '.'
-        Write-AppLog $logLine
-        continue
-      }
-
-      if($s.StartsWith('PLAYER_JOIN||')){
-        if(-not $script:SessionReady){ [void](Ensure-SessionReady('OnPlayerJoined fallback')) }
-        if(-not $script:SessionReady){ continue }
-        $parts=$s.Split('||',5)
-        $rawName = ''
-        $rawUserId = ''
-        $rawPlaceholder = ''
-        $rawLine = ''
-        if($parts.Length -ge 2){ $rawName = $parts[1] }
-        if($parts.Length -ge 3){ $rawUserId = $parts[2] }
-        if($parts.Length -ge 5){
-          $rawPlaceholder = $parts[3]
-          $rawLine = $parts[4]
-        }elseif($parts.Length -ge 4){
-          $rawLine = $parts[3]
-        }
-
-        $name = Normalize-JoinName $rawName
-        $originalName = $name
-        $placeholder = Normalize-JoinName $rawPlaceholder
-
-        $userId = $null
-        if(-not [string]::IsNullOrWhiteSpace($rawUserId)){
-          $tmpUser = [regex]::Replace($rawUserId,'[\u200B-\u200D\uFEFF]','').Trim()
-          if(-not [string]::IsNullOrWhiteSpace($tmpUser)){ $userId = $tmpUser }
-        }
-
-        $userKey = $null
-        if($userId){ $userKey = $userId.ToLowerInvariant() }
-
-        $eventTime = Get-Date
-        $script:SessionLastJoinAt = $eventTime
-
-        if($userKey -and $script:LocalUserId -and $userKey -eq $script:LocalUserId){
-          Write-AppLog ("Skipping join for known local userId '" + $userId + "'.")
-          $script:PendingSelfJoin = $null
-          continue
-        }
-
-        $pendingSelf = $script:PendingSelfJoin
-        if($pendingSelf -and $pendingSelf.SessionId -eq $script:SessionId){
-          $pendingPlaceholder = $pendingSelf.Placeholder
-          if($pendingPlaceholder){ $pendingPlaceholder = Normalize-JoinName $pendingPlaceholder }
-          $pendingLower = $null
-          if($pendingPlaceholder){ $pendingLower = $pendingPlaceholder.ToLowerInvariant() }
-          $eventPlaceholderLower = $null
-          if($placeholder){ $eventPlaceholderLower = $placeholder.ToLowerInvariant() }
-          elseif(Is-PlaceholderName $originalName){ $eventPlaceholderLower = $originalName.ToLowerInvariant() }
-          $ageOk = $false
-          if($pendingSelf.Timestamp){
-            try{ $ageOk = (($eventTime - $pendingSelf.Timestamp).TotalSeconds -lt 10) }
-            catch{ $ageOk = $false }
-          }
-          if($ageOk -and $pendingLower -and ($pendingLower -eq 'player' -or $pendingLower -eq 'you')){
-            if($pendingLower -eq $eventPlaceholderLower -or (-not $eventPlaceholderLower -and (Is-PlaceholderName $originalName))){
-              if($userKey -and -not $script:LocalUserId){ $script:LocalUserId = $userKey }
-              $script:PendingSelfJoin = $null
-              Write-AppLog 'Skipping join matched pending self event.'
-              continue
-            }
-          }
-        }
-
-        $isPlaceholder = Is-PlaceholderName $name
-        $wasPlaceholder = $isPlaceholder
-        $isFallbackSession = ($script:SessionSource -eq 'OnPlayerJoined fallback')
-        if($wasPlaceholder -and $userKey){
-          if($isFallbackSession -and -not $script:LocalUserId){
-            $script:LocalUserId = $userKey
-            Write-AppLog ("Learned local userId from join event: " + $userId)
-            Write-AppLog ("Skipping initial local join placeholder for userId '" + $userId + "'.")
-            $script:PendingSelfJoin = $null
-            continue
-          }
-          if($script:LocalUserId -and $script:LocalUserId -eq $userKey){
-            Write-AppLog ("Skipping local join placeholder for userId '" + $userId + "'.")
-            $script:PendingSelfJoin = $null
-            continue
-          }
-        }
-
-        if(-not $name -and $userId){
-          $name = $userId
-          $isPlaceholder = $false
-        }elseif($isPlaceholder -and $userId){
-          $name = $userId
-          $isPlaceholder = $false
-        }
-
-        if(-not $name){ $name = 'Unknown VRChat user' }
-
-        $keyBase = if($userKey){ $userKey } else { $name.ToLowerInvariant() }
-        $hashSuffix = ''
-        if(-not $userId -and -not [string]::IsNullOrWhiteSpace($rawLine)){
-          $hashSuffix = Get-ShortHash $rawLine
-        }
-
-        $joinKey = "join:{0}:{1}" -f $script:SessionId,$keyBase
-        if($hashSuffix){ $joinKey += ":" + $hashSuffix }
-
-        if(-not $script:SeenPlayers.ContainsKey($joinKey)){
-          $script:SeenPlayers[$joinKey]=$eventTime
-          $placeholderForMessage = $placeholder
-          if([string]::IsNullOrWhiteSpace($placeholderForMessage) -and $wasPlaceholder){
-            $placeholderForMessage = $originalName
-          }
-          if([string]::IsNullOrWhiteSpace($placeholderForMessage)){ $placeholderForMessage = 'Someone' }
-          elseif($placeholderForMessage.ToLowerInvariant() -eq 'you'){ $placeholderForMessage = 'Player' }
-          $messageName = $name
-          if([string]::IsNullOrWhiteSpace($messageName)){ $messageName = $placeholderForMessage }
-          else{ $messageName = $messageName + '(' + $placeholderForMessage + ')' }
-          $desktopNotification = $true
-          if($wasPlaceholder -and [string]::IsNullOrWhiteSpace($userId)){
-            $placeholderLower = ''
-            if(-not [string]::IsNullOrWhiteSpace($placeholderForMessage)){
-              $placeholderLower = $placeholderForMessage.Trim().ToLowerInvariant()
-            }
-            if($placeholderLower -eq 'a player'){ $desktopNotification = $false }
-          }
-          $message = $messageName + ' joined your instance.'
-          Notify-All $joinKey $AppName $message $desktopNotification
-
-          $logLine = "Session {0}: player joined '{1}'" -f $script:SessionId,$name
-          if($userId){ $logLine += " (" + $userId + ")" }
-          $logLine += '.'
-          Write-AppLog $logLine
-        }
-        continue
-      }
     }
-  }catch{ Write-AppLog ("Receive-Job error: " + $_.Exception.Message) }
-}
-
-# ---------------- Startup shortcut ----------------
-function Get-StartupFolder{ [Environment]::GetFolderPath('Startup') }
-function Get-StartupShortcutPath{ Join-Path (Get-StartupFolder) 'VRChatJoinNotifier.lnk' }
-function Add-Startup{
-  try{
-    $startup=Get-StartupFolder; Ensure-Dir $startup
-    $launcher=Get-LauncherPath
-    $lnk=Get-StartupShortcutPath
-    $wsh=New-Object -ComObject WScript.Shell
-    $sc=$wsh.CreateShortcut($lnk)
-    if($launcher.ToLower().EndsWith('.exe')){ $sc.TargetPath=$launcher; $sc.Arguments='' }
-    else{
-      $sc.TargetPath="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-      $sc.Arguments="-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcher`""
+    if(-not $cleanName -and $cleanUser){
+        $cleanName = $cleanUser
+        $isPlaceholder = $false
+    } elseif($isPlaceholder -and $cleanUser){
+        $cleanName = $cleanUser
+        $isPlaceholder = $false
     }
-    $sc.WorkingDirectory=Split-Path $launcher -Parent
-    $ico=Join-Path (Split-Path $launcher -Parent) 'vrchat_join_notification\notification.ico'
-    if(Test-Path $ico){ $sc.IconLocation=$ico }
-    $sc.Save()
-    Show-Notification $AppName 'Added to Startup.'
-    return $true
-  }catch{
-    Show-Notification $AppName ("Failed to add Startup: " + $_.Exception.Message)
-    return $false
-  }
-}
-function Remove-Startup{
-  try{
-    $lnk=Get-StartupShortcutPath
-    if(Test-Path $lnk){ Remove-Item $lnk -Force }
-    Show-Notification $AppName 'Removed from Startup.'
-    return $true
-  }catch{
-    Show-Notification $AppName ("Failed to remove Startup: " + $_.Exception.Message)
-    return $false
-  }
-}
-
-function Exit-App{
-  Stop-Follow
-  try{ if($global:PulseTimer){ $global:PulseTimer.Stop(); $global:PulseTimer.Dispose(); $global:PulseTimer=$null } }catch{}
-  try{ if($global:TrayIcon){ $global:TrayIcon.Visible=$false; $global:TrayIcon.Dispose(); $global:TrayIcon=$null } }catch{}
-  try{ if($global:HostForm){ $global:HostForm.Close(); $global:HostForm.Dispose(); $global:HostForm=$null } }catch{}
-  try{ if($global:SettingsForm -and (-not $global:SettingsForm.IsDisposed)){ $global:SettingsForm.Close() } }catch{}
-  try{ if($script:Mutex){ $script:Mutex.ReleaseMutex() | Out-Null } }catch{}
-  [System.Windows.Forms.Application]::Exit()
-  [Environment]::Exit(0)
-}
-
-# ---------------- Settings GUI (single instance) ----------------
-function Show-SettingsForm{
-  if($global:SettingsForm -and (-not $global:SettingsForm.IsDisposed)){
-    if(-not $global:SettingsForm.Visible){ $global:SettingsForm.Show() }
-    $global:SettingsForm.WindowState='Normal'
-    $global:SettingsForm.TopMost=$true
-    $global:SettingsForm.Activate(); $global:SettingsForm.Focus(); $global:SettingsForm.BringToFront()
-    $tmpTimer = New-Object System.Windows.Forms.Timer
-    $tmpTimer.Interval=200
-    $tmpTimer.Add_Tick({ param($s,$e) $global:SettingsForm.TopMost=$false; $s.Stop(); $s.Dispose() })
-    $tmpTimer.Start()
-    return
-  }
-
-  $form=New-Object System.Windows.Forms.Form
-  $form.Text='VRChat Join Notifier (Windows)'
-  $form.Size=New-Object System.Drawing.Size(760,320)
-  $form.StartPosition='CenterScreen'
-  $form.MinimumSize=$form.Size
-
-  $lblInstall=New-Object System.Windows.Forms.Label
-  $lblInstall.Text='Install Folder (logs/cache):'
-  $lblInstall.Location=New-Object System.Drawing.Point(12,12)
-  $lblInstall.AutoSize=$true
-
-  $txtInstall=New-Object System.Windows.Forms.TextBox
-  $txtInstall.Location=New-Object System.Drawing.Point(12,32)
-  $txtInstall.Size=New-Object System.Drawing.Size(600,24)
-  $txtInstall.Text=$global:Cfg.InstallDir
-
-  $btnBrowseInstall=New-Object System.Windows.Forms.Button
-  $btnBrowseInstall.Text='Browse...'
-  $btnBrowseInstall.Location=New-Object System.Drawing.Point(624,30)
-  $btnBrowseInstall.Size=New-Object System.Drawing.Size(110,28)
-  $btnBrowseInstall.Add_Click({ param($sender,$e)
-    $dlg=New-Object System.Windows.Forms.FolderBrowserDialog
-    if($dlg.ShowDialog() -eq 'OK'){ $txtInstall.Text=$dlg.SelectedPath }
-  })
-
-  $lblVR=New-Object System.Windows.Forms.Label
-  $lblVR.Text='VRChat Log Folder:'
-  $lblVR.Location=New-Object System.Drawing.Point(12,72)
-  $lblVR.AutoSize=$true
-
-  $txtVR=New-Object System.Windows.Forms.TextBox
-  $txtVR.Location=New-Object System.Drawing.Point(12,92)
-  $txtVR.Size=New-Object System.Drawing.Size(600,24)
-  $txtVR.Text=$global:Cfg.VRChatLogDir
-
-  $btnBrowseVR=New-Object System.Windows.Forms.Button
-  $btnBrowseVR.Text='Browse...'
-  $btnBrowseVR.Location=New-Object System.Drawing.Point(624,90)
-  $btnBrowseVR.Size=New-Object System.Drawing.Size(110,28)
-  $btnBrowseVR.Add_Click({ param($sender,$e)
-    $dlg=New-Object System.Windows.Forms.FolderBrowserDialog
-    if($dlg.ShowDialog() -eq 'OK'){ $txtVR.Text=$dlg.SelectedPath }
-  })
-
-  $lblUser=New-Object System.Windows.Forms.Label
-  $lblUser.Text='Pushover User Key:'
-  $lblUser.Location=New-Object System.Drawing.Point(12,126)
-  $lblUser.AutoSize=$true
-
-  $txtUser=New-Object System.Windows.Forms.TextBox
-  $txtUser.Location=New-Object System.Drawing.Point(12,146)
-  $txtUser.Size=New-Object System.Drawing.Size(300,24)
-  $txtUser.UseSystemPasswordChar=$true
-  if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverUser)){
-    $txtUser.Text=''
-  }else{
-    $txtUser.Text='*****'
-  }
-
-  $lblToken=New-Object System.Windows.Forms.Label
-  $lblToken.Text='Pushover API Token:'
-  $lblToken.Location=New-Object System.Drawing.Point(324,126)
-  $lblToken.AutoSize=$true
-
-  $txtToken=New-Object System.Windows.Forms.TextBox
-  $txtToken.Location=New-Object System.Drawing.Point(324,146)
-  $txtToken.Size=New-Object System.Drawing.Size(410,24)
-  $txtToken.UseSystemPasswordChar=$true
-  if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverToken)){
-    $txtToken.Text=''
-  }else{
-    $txtToken.Text='*****'
-  }
-
-  $updateConfigFromForm = {
-    $global:Cfg.InstallDir   = $txtInstall.Text
-    $global:Cfg.VRChatLogDir = $txtVR.Text
-    if($txtUser.Text -ne '*****'){  $global:Cfg.PushoverUser  = $txtUser.Text }
-    if($txtToken.Text -ne '*****'){ $global:Cfg.PushoverToken = $txtToken.Text }
-  }
-
-  $btnSaveRestart=New-Object System.Windows.Forms.Button
-  $btnSaveRestart.Text='Save & Restart Monitoring'
-  $btnSaveRestart.Location=New-Object System.Drawing.Point(12,180)
-  $btnSaveRestart.Size=New-Object System.Drawing.Size(280,32)
-  $btnSaveRestart.Add_Click({
-    & $updateConfigFromForm
-    Save-Config
-    Start-Follow
-    Show-Notification $AppName 'Settings saved & monitoring restarted.'
-  })
-
-  $btnStart=New-Object System.Windows.Forms.Button
-  $btnStart.Text='Start Monitoring'
-  $btnStart.Location=New-Object System.Drawing.Point(308,180)
-  $btnStart.Size=New-Object System.Drawing.Size(180,32)
-  $btnStart.Add_Click({
-    Start-Follow
-    Show-Notification $AppName 'Monitoring started.'
-  })
-
-  $btnStop=New-Object System.Windows.Forms.Button
-  $btnStop.Text='Stop Monitoring'
-  $btnStop.Location=New-Object System.Drawing.Point(500,180)
-  $btnStop.Size=New-Object System.Drawing.Size(180,32)
-  $btnStop.Add_Click({
-    Stop-Follow
-    Show-Notification $AppName 'Monitoring stopped.'
-  })
-
-  $btnAddStartup=New-Object System.Windows.Forms.Button
-  $btnAddStartup.Text='Add to Startup'
-  $btnAddStartup.Location=New-Object System.Drawing.Point(12,220)
-  $btnAddStartup.Size=New-Object System.Drawing.Size(200,32)
-
-  $btnRemoveStartup=New-Object System.Windows.Forms.Button
-  $btnRemoveStartup.Text='Remove from Startup'
-  $btnRemoveStartup.Location=New-Object System.Drawing.Point(220,220)
-  $btnRemoveStartup.Size=New-Object System.Drawing.Size(260,32)
-
-  $btnSave=New-Object System.Windows.Forms.Button
-  $btnSave.Text='Save'
-  $btnSave.Location=New-Object System.Drawing.Point(488,220)
-  $btnSave.Size=New-Object System.Drawing.Size(110,32)
-  $btnSave.Add_Click({
-    & $updateConfigFromForm
-    Save-Config
-    Show-Notification $AppName 'Settings saved.'
-  })
-
-  $btnQuit=New-Object System.Windows.Forms.Button
-  $btnQuit.Text='Quit'
-  $btnQuit.Location=New-Object System.Drawing.Point(624,220)
-  $btnQuit.Size=New-Object System.Drawing.Size(110,32)
-  $btnQuit.Add_Click({ Exit-App })
-
-  $updateStartupButtons = {
-    $exists = Test-Path (Get-StartupShortcutPath)
-    $btnAddStartup.Enabled = -not $exists
-    $btnRemoveStartup.Enabled = $exists
-  }
-
-  $btnAddStartup.Add_Click({
-    if(Add-Startup){ & $updateStartupButtons }
-  })
-
-  $btnRemoveStartup.Add_Click({
-    if(Remove-Startup){ & $updateStartupButtons }
-  })
-
-  $form.Controls.AddRange(@(
-    $lblInstall,$txtInstall,$btnBrowseInstall,
-    $lblVR,$txtVR,$btnBrowseVR,
-    $lblUser,$txtUser,$lblToken,$txtToken,
-    $btnSaveRestart,$btnStart,$btnStop,
-    $btnAddStartup,$btnRemoveStartup,$btnSave,$btnQuit
-  ))
-
-  & $updateStartupButtons
-
-  $form.Add_Shown({ param($sender,$e) $sender.Activate() })
-  $form.Add_FormClosed({ param($sender,$e) $global:SettingsForm=$null })
-
-  $global:SettingsForm = $form
-  [void]$form.ShowDialog()
-}
-
-# ---------------- Tray & pulse animation (ALL GLOBAL STATE) ----------------
-function Init-Tray{
-  if($global:TrayIcon){ return }
-  $owner = New-Object System.Windows.Forms.Form
-  $owner.ShowInTaskbar=$false; $owner.FormBorderStyle='FixedToolWindow'
-  $owner.Opacity=0; $owner.WindowState='Minimized'
-  $owner.Size=New-Object System.Drawing.Size(0,0); $owner.StartPosition='Manual'
-  $owner.Location=New-Object System.Drawing.Point(-2000,-2000)
-  $owner.Add_Shown({ param($sender,$e) $sender.Hide() })
-  $owner.Show(); $global:HostForm=$owner
-
-  $ni=New-Object System.Windows.Forms.NotifyIcon
-  $ni.Visible=$true; $ni.Text=$AppName
-
-  $launcherDir=Split-Path (Get-LauncherPath) -Parent
-  $icoPath=Join-Path $launcherDir 'vrchat_join_notification\notification.ico'
-  if(Test-Path $icoPath){
-    try{ $ni.Icon = New-Object System.Drawing.Icon($icoPath) } catch { $ni.Icon=[System.Drawing.SystemIcons]::Information }
-  } else { $ni.Icon=[System.Drawing.SystemIcons]::Information }
-  $global:IconIdle   = $ni.Icon
-  $global:IconPulseA = [System.Drawing.SystemIcons]::Application
-  $global:IconPulseB = [System.Drawing.SystemIcons]::Information
-
-  $menu=New-Object System.Windows.Forms.ContextMenuStrip
-  $global:TrayMenu=$menu
-  $menu.Items.Add('Settings...').Add_Click({ param($s,$e) Show-SettingsForm }) | Out-Null
-  $menu.Items.Add('Restart Monitoring').Add_Click({ param($s,$e)
-      Start-Follow
-      Start-TrayPulse -Message 'Restarting monitor...' -Seconds 2.5 -IntervalMs 150
-      Show-Notification $AppName 'Monitoring restarted.'
-    }) | Out-Null
-  [void]$menu.Items.Add('-')
-  $menu.Items.Add('Exit').Add_Click({ param($s,$e) Exit-App }) | Out-Null
-
-  $ni.ContextMenuStrip=$menu
-  $ni.add_MouseUp({ param($sender,$e)
-    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
-      $m = $sender.ContextMenuStrip
-      if($m){ $m.Show([System.Windows.Forms.Cursor]::Position) }
-    }
-  })
-  $ni.add_DoubleClick({ Show-SettingsForm })
-  $ni.add_BalloonTipClicked({ Show-SettingsForm })
-
-  $global:TrayIcon=$ni
-  $global:IdleTooltip=$AppName
-}
-
-function Start-TrayPulse{
-  param(
-    [string]$Message = 'Working...',
-    [double]$Seconds = 2.0,
-    [int]$IntervalMs = 120
-  )
-  if(-not $global:TrayIcon){ return }
-
-  # Stop previous pulse if any
-  if($global:PulseTimer){
-    try{ $global:PulseTimer.Stop(); $global:PulseTimer.Dispose() }catch{}
-    $global:PulseTimer=$null
-  }
-
-  $global:TrayIcon.Text = "$AppName $EmDash $Message"
-  $global:PulseStopAt = (Get-Date).AddSeconds($Seconds)
-  $global:PulseFrame = $false
-
-  $global:PulseTimer = New-Object System.Windows.Forms.Timer
-  $global:PulseTimer.Interval = [Math]::Max(60,$IntervalMs)
-  $global:PulseTimer.Add_Tick({
-    param($sender,$e)
-    if((Get-Date) -ge $global:PulseStopAt){
-      try{
-        if($global:TrayIcon){ $global:TrayIcon.Icon = $global:IconIdle; $global:TrayIcon.Text = $global:IdleTooltip }
-      }catch{}
-      $sender.Stop(); $sender.Dispose(); $global:PulseTimer=$null
-      return
-    }
-    $global:PulseFrame = -not $global:PulseFrame
-    try{
-      if($global:TrayIcon){
-        if($global:PulseFrame){
-          $global:TrayIcon.Icon = $global:IconPulseA
-        }else{
-          $global:TrayIcon.Icon = $global:IconPulseB
+    if(-not $cleanName){ $cleanName = 'Unknown VRChat user' }
+    $removedCount = 0
+    if($userKey){
+        $prefix = "join:$($script:Session.SessionId):$userKey"
+        $keysToRemove = @()
+        foreach($key in $script:Session.SeenPlayers.Keys){
+            if($key.StartsWith($prefix)){ $keysToRemove += $key }
         }
-      }
-    }catch{}
-  })
-  $global:PulseTimer.Start()
+        foreach($key in $keysToRemove){
+            $script:Session.SeenPlayers.Remove($key) | Out-Null
+            $removedCount++
+        }
+    }
+    $logLine = "Session $($script:Session.SessionId): player left '$cleanName'"
+    if($cleanUser){ $logLine += " ($cleanUser)" }
+    if($removedCount){ $logLine += ' [cleared join tracking]' }
+    $logLine += '.'
+    Write-AppLog $logLine
 }
 
-# ---------------- Main loop ----------------
-function Load-And-Start{
-  Load-Config
-  Init-Tray
-  if($open_settings){ Show-SettingsForm }
-  if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverUser) -or [string]::IsNullOrWhiteSpace($global:Cfg.PushoverToken)){
-    Show-SettingsForm
-  }else{
-    Start-Follow
-  }
+function Send-DesktopNotification {
+    Param([string]$Title, [string]$Message)
+    if($script:TrayIcon){
+        try {
+            $script:TrayIcon.BalloonTipTitle = $Title
+            $script:TrayIcon.BalloonTipText = $Message
+            $script:TrayIcon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+            $script:TrayIcon.ShowBalloonTip(5000)
+        } catch {}
+    }
 }
-function Main{
-  try{
-    Init-SingleInstance
-    Load-And-Start
+
+function Send-PushoverNotification {
+    Param([string]$Title, [string]$Message)
+    $token = ([string]$script:Config.PushoverToken).Trim()
+    $user = ([string]$script:Config.PushoverUser).Trim()
+    if([string]::IsNullOrEmpty($token) -or [string]::IsNullOrEmpty($user)){ return }
+    try {
+        $payload = @{ token = $token; user = $user; title = $Title; message = $Message; priority = '0' }
+        [System.Threading.Tasks.Task]::Run({
+            Param($Body, $Uri)
+            try {
+                $client = New-Object System.Net.Http.HttpClient
+                try {
+                    $content = New-Object System.Net.Http.FormUrlEncodedContent($Body)
+                    $response = $client.PostAsync($Uri, $content).GetAwaiter().GetResult()
+                    $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                    try {
+                        $json = $raw | ConvertFrom-Json -ErrorAction Stop
+                        $status = if($json.PSObject.Properties['status']){ $json.status } else { '?' }
+                        Write-AppLog "Pushover sent: $status"
+                    } catch {
+                        Write-AppLog "Pushover response: $raw"
+                    }
+                } finally {
+                    $client.Dispose()
+                }
+            } catch {
+                Write-AppLog "Pushover failed: $($_.Exception.Message)"
+            }
+        }, @($payload, $POUrl)) | Out-Null
+    } catch {
+        Write-AppLog "Failed to queue Pushover request: $($_.Exception.Message)"
+    }
+}
+function Process-LogLine {
+    Param([string]$Line)
+    if([string]::IsNullOrWhiteSpace($Line)){ return }
+    $safe = Strip-ZeroWidth($Line).Replace('||','|').Trim()
+    if(-not $safe){ return }
+    $lower = $safe.ToLowerInvariant()
+    if($lower.Contains('onleftroom')){
+        Enqueue-Event 'room_left' $safe
+        return
+    }
+    $roomEvent = Parse-RoomTransitionLine $safe
+    if($roomEvent){
+        Enqueue-Event 'room_enter' $roomEvent
+        return
+    }
+    if([regex]::IsMatch($safe, '(?i)\[Behaviour\].*OnJoinedRoom\b')){
+        Enqueue-Event 'self_join' $safe
+        return
+    }
+    if([regex]::IsMatch($safe, '(?i)\[Behaviour\].*OnPlayerLeft\b')){
+        $parsed = Parse-PlayerEventLine -Line $safe -EventToken 'OnPlayerLeft'
+        if(-not $parsed){
+            $parsed = [pscustomobject]@{ name=''; user_id=''; placeholder=''; raw_line=$safe }
+        }
+        Enqueue-Event 'player_left' $parsed
+        return
+    }
+    if([regex]::IsMatch($safe, '(?i)\[Behaviour\].*OnPlayerJoined\b')){
+        $parsed = Parse-PlayerEventLine -Line $safe -EventToken 'OnPlayerJoined'
+        if(-not $parsed){
+            $parsed = [pscustomobject]@{ name=''; user_id=''; placeholder=''; raw_line=$safe }
+        }
+        Enqueue-Event 'player_join' $parsed
+        return
+    }
+}
+
+function Follow-LogFile {
+    Param(
+        [string]$Path,
+        [string]$LogDir,
+        $Token
+    )
+    $normalized = [System.IO.Path]::GetFullPath($Path)
+    Enqueue-Event 'log_switch' $normalized
+    Enqueue-Event 'monitor_status' "Watching $normalized"
+    try {
+        $lastSize = 0
+        try {
+            $lastSize = (Get-Item -LiteralPath $normalized -ErrorAction Stop).Length
+        } catch {
+            $lastSize = 0
+        }
+        $fileMode = [System.IO.FileMode]::Open
+        $fileAccess = [System.IO.FileAccess]::Read
+        $fileShare = [System.IO.FileShare]::ReadWrite
+        while(-not $Token.IsCancellationRequested){
+            try {
+                $fs = New-Object System.IO.FileStream($normalized, $fileMode, $fileAccess, $fileShare)
+                try {
+                    $reader = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true)
+                    $reader.BaseStream.Seek($lastSize, [System.IO.SeekOrigin]::Begin) | Out-Null
+                    while(-not $Token.IsCancellationRequested){
+                        $position = $reader.BaseStream.Position
+                        $line = $reader.ReadLine()
+                        if($line -ne $null){
+                            $lastSize = $reader.BaseStream.Position
+                            Process-LogLine $line
+                            continue
+                        }
+                        if($Token.WaitHandle.WaitOne(600)){
+                            return
+                        }
+                        try {
+                            $currentSize = (Get-Item -LiteralPath $normalized -ErrorAction Stop).Length
+                        } catch {
+                            Start-Sleep -Milliseconds 600
+                            break
+                        }
+                        if($currentSize -lt $lastSize){
+                            $reader.DiscardBufferedData()
+                            $reader.BaseStream.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
+                            $lastSize = 0
+                            continue
+                        }
+                        $reader.BaseStream.Seek($position, [System.IO.SeekOrigin]::Begin) | Out-Null
+                        $newest = Get-NewestLogPath $LogDir
+                        if($newest -and [System.IO.Path]::GetFullPath($newest) -ne $normalized){
+                            return
+                        }
+                    }
+                } finally {
+                    $reader.Dispose()
+                }
+            } catch {
+                Write-AppLog "Failed reading log '$normalized': $($_.Exception.Message)"
+                Enqueue-Event 'error' "Log read error: $($_.Exception.Message)"
+                if($Token.WaitHandle.WaitOne(2000)){ return }
+            } finally {
+                if($fs){ $fs.Dispose() }
+            }
+        }
+    } finally {
+        Enqueue-Event 'monitor_status' 'Stopped'
+    }
+}
+
+function Monitor-Loop {
+    Param($Token)
+    try {
+        Enqueue-Event 'monitor_status' 'Running'
+        $lastDirWarning = [DateTime]::UtcNow.AddSeconds(-60)
+        $lastNoFileWarning = [DateTime]::UtcNow.AddSeconds(-60)
+        while(-not $Token.IsCancellationRequested){
+            $logDir = $script:Config.VRChatLogDir
+            if([string]::IsNullOrWhiteSpace($logDir) -or -not (Test-Path $logDir -PathType Container)){
+                if(([DateTime]::UtcNow - $lastDirWarning).TotalSeconds -gt 10){
+                    Enqueue-Event 'status' "Waiting for VRChat log directory at $logDir"
+                    $lastDirWarning = [DateTime]::UtcNow
+                }
+                if($Token.WaitHandle.WaitOne(1000)){ break }
+                continue
+            }
+            $newest = Get-NewestLogPath $logDir
+            if(-not $newest){
+                if(([DateTime]::UtcNow - $lastNoFileWarning).TotalSeconds -gt 10){
+                    Enqueue-Event 'status' "No log files found in $logDir"
+                    $lastNoFileWarning = [DateTime]::UtcNow
+                }
+                if($Token.WaitHandle.WaitOne(1000)){ break }
+                continue
+            }
+            Follow-LogFile $newest $logDir $Token
+        }
+    } catch {
+        Write-AppLog "Monitor loop error: $($_.Exception.Message)"
+        Enqueue-Event 'error' "Monitor error: $($_.Exception.Message)"
+    } finally {
+        Enqueue-Event 'monitor_status' 'Stopped'
+    }
+}
+
+function Get-SessionDescription {
+    if($script:Session.Ready){
+        $source = if($script:Session.Source){ $script:Session.Source } else { 'unknown' }
+        return "Session $($script:Session.SessionId) – $source"
+    }
+    return 'No active session'
+}
+
+function Update-TrayState {
+    $monitoring = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
+    $tooltip = "$AppName – " + ($monitoring ? 'Monitoring' : 'Stopped')
+    if($script:Session.Ready){
+        $tooltip += "`n" + (Get-SessionDescription)
+    }
+    if($script:TrayIcon){
+        try {
+            $text = if($tooltip.Length -gt 63){ $tooltip.Substring(0,63) } else { $tooltip }
+            $script:TrayIcon.Text = $text
+        } catch {}
+    }
+}
+
+function Set-Status {
+    Param([string]$Text)
+    if($script:Controls.Status){
+        $script:Controls.Status.Text = $Text
+    }
+}
+
+function Set-MonitorStatus {
+    Param([string]$Text)
+    if($script:Controls.MonitorStatus){
+        $script:Controls.MonitorStatus.Text = $Text
+    }
+}
+
+function Set-SessionLabel {
+    if($script:Controls.Session){
+        $script:Controls.Session.Text = Get-SessionDescription
+    }
+}
+
+function Set-LastEvent {
+    Param([string]$Text)
+    if($script:Controls.LastEvent){
+        $script:Controls.LastEvent.Text = $Text
+    }
+}
+
+function Set-CurrentLog {
+    Param([string]$Path)
+    if($script:Controls.CurrentLog){
+        $script:Controls.CurrentLog.Text = if($Path){ $Path } else { '(none)' }
+    }
+}
+
+function Handle-Event {
+    Param([object[]]$Event)
+    if(-not $Event){ return }
+    $etype = [string]$Event[0]
+    switch($etype){
+        'status' {
+            Set-Status ([string]$Event[1])
+        }
+        'error' {
+            Set-Status ([string]$Event[1])
+        }
+        'monitor_status' {
+            Set-MonitorStatus ([string]$Event[1])
+        }
+        'log_switch' {
+            $path = [string]$Event[1]
+            Set-CurrentLog $path
+            Handle-LogSwitch $path
+            Set-SessionLabel
+            Set-LastEvent 'Switched to new log file.'
+        }
+        'room_enter' {
+            $info = $Event[1]
+            Handle-RoomEnter $info
+            $desc = $info.world
+            if($info.world -and $info.instance){ $desc = "$($info.world):$($info.instance)" }
+            if(-not $desc){ $desc = $info.raw_line }
+            if(-not $desc){ $desc = '(unknown room)' }
+            Set-LastEvent "Room transition detected: $desc"
+        }
+        'room_left' {
+            Handle-RoomLeft
+            Set-SessionLabel
+            Set-LastEvent 'Left current room.'
+        }
+        'self_join' {
+            Handle-SelfJoin ([string]$Event[1])
+            Set-SessionLabel
+            Set-LastEvent 'OnJoinedRoom detected.'
+        }
+        'player_join' {
+            $info = $Event[1]
+            Handle-PlayerJoin $info.name $info.user_id $info.raw_line $info.placeholder
+            Set-SessionLabel
+            $display = if($info.name){ $info.name } elseif($info.user_id){ $info.user_id } else { 'Unknown VRChat user' }
+            Set-LastEvent "Player joined: $display"
+        }
+        'player_left' {
+            $info = $Event[1]
+            Handle-PlayerLeft $info.name $info.user_id $info.raw_line
+            Set-SessionLabel
+            $display = if($info.name){ $info.name } elseif($info.user_id){ $info.user_id } else { 'Unknown VRChat user' }
+            Set-LastEvent "Player left: $display"
+        }
+    }
+    Update-TrayState
+}
+
+function Process-Events {
     while($true){
-      try{
-        [System.Windows.Forms.Application]::DoEvents()
-        if($script:OpenEvt.WaitOne(0)){ Show-SettingsForm }  # external "open settings" signal
-        Process-FollowOutput
-      }catch{}
-      Start-Sleep -Milliseconds 150
+        $event = $null
+        if(-not $script:EventQueue.TryDequeue([ref]$event)){ break }
+        Handle-Event $event
     }
-  }catch{
-    [System.Windows.Forms.MessageBox]::Show("Unhandled error:`r`n" + $_.Exception.Message,$AppName,'OK','Error') | Out-Null
-    [Environment]::Exit(1)
-  }
+}
+
+function Update-ConfigFromForm {
+    if(-not $script:Controls){ return }
+    if($script:Controls.Install){ $script:Config.InstallDir = Expand-PathSafe $script:Controls.Install.Text }
+    if($script:Controls.LogDir){ $script:Config.VRChatLogDir = Expand-PathSafe $script:Controls.LogDir.Text }
+    if($script:Controls.POUser){ $script:Config.PushoverUser = $script:Controls.POUser.Text.Trim() }
+    if($script:Controls.POToken){ $script:Config.PushoverToken = $script:Controls.POToken.Text.Trim() }
+}
+function Start-Monitoring {
+    if($script:MonitorThread -and $script:MonitorThread.IsAlive){ return }
+    Update-ConfigFromForm
+    Ensure-Dir $script:Config.InstallDir
+    $script:MonitorTokenSource = New-Object System.Threading.CancellationTokenSource
+    $token = $script:MonitorTokenSource.Token
+    $start = New-Object System.Threading.ParameterizedThreadStart({ param($ct) Monitor-Loop $ct })
+    $script:MonitorThread = New-Object System.Threading.Thread($start)
+    $script:MonitorThread.IsBackground = $true
+    $script:MonitorThread.Start($token)
+    Set-MonitorStatus 'Starting...'
+    Write-AppLog 'Monitoring started.'
+    Update-TrayState
+}
+
+function Stop-Monitoring {
+    if(-not $script:MonitorThread){ return }
+    try {
+        if($script:MonitorTokenSource){ $script:MonitorTokenSource.Cancel() }
+        if($script:MonitorThread.IsAlive){ $script:MonitorThread.Join(3000) | Out-Null }
+    } catch {}
+    $script:MonitorThread = $null
+    $script:MonitorTokenSource = $null
+    Set-MonitorStatus 'Stopped'
+    Update-TrayState
+    Write-AppLog 'Monitoring stopped.'
+}
+
+function Restart-Monitoring {
+    Stop-Monitoring
+    Start-Monitoring
+}
+
+function Get-LauncherPath {
+    $arg0 = [Environment]::GetCommandLineArgs()[0]
+    if($arg0 -and (Split-Path $arg0 -Leaf).ToLower().EndsWith('.exe')){ return $arg0 }
+    if($PSCommandPath){ return $PSCommandPath }
+    return $arg0
+}
+
+function Get-AppIcon {
+    $candidates = @()
+    if($PSScriptRoot){
+        $candidates += Join-Path $PSScriptRoot $IconFileName
+        $candidates += Join-Path $PSScriptRoot ('vrchat_join_notification\' + $IconFileName)
+    }
+    $launcherDir = Split-Path (Get-LauncherPath) -Parent
+    if($launcherDir){
+        $candidates += Join-Path $launcherDir $IconFileName
+        $candidates += Join-Path $launcherDir ('vrchat_join_notification\' + $IconFileName)
+    }
+    foreach($candidate in $candidates){
+        if($candidate -and (Test-Path $candidate)){
+            try { return New-Object System.Drawing.Icon($candidate) } catch {}
+        }
+    }
+    return [System.Drawing.SystemIcons]::Information
+}
+
+function Get-StartupShortcutPath {
+    $startup = [Environment]::GetFolderPath('Startup')
+    return Join-Path $startup 'VRChat Join Notification with Pushover.lnk'
+}
+
+function Update-StartupButtons {
+    $exists = Test-Path (Get-StartupShortcutPath)
+    if($script:Controls.AddStartup){ $script:Controls.AddStartup.Enabled = -not $exists }
+    if($script:Controls.RemoveStartup){ $script:Controls.RemoveStartup.Enabled = $exists }
+}
+
+function Add-ToStartup {
+    try {
+        $shortcutPath = Get-StartupShortcutPath
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $launcher = Get-LauncherPath
+        $shortcut.TargetPath = $launcher
+        $shortcut.WorkingDirectory = Split-Path $launcher -Parent
+        $shortcut.IconLocation = "$launcher,0"
+        $shortcut.Save()
+        Set-Status 'Added to startup.'
+        Write-AppLog "Startup entry created at $shortcutPath"
+        Send-DesktopNotification $AppName 'Added to Windows startup.'
+    } catch {
+        $msg = "Failed to add to startup: $($_.Exception.Message)"
+        Set-Status $msg
+        Write-AppLog $msg
+        Send-DesktopNotification $AppName $msg
+    } finally {
+        Update-StartupButtons
+    }
+}
+
+function Remove-FromStartup {
+    try {
+        $shortcutPath = Get-StartupShortcutPath
+        if(Test-Path $shortcutPath){ Remove-Item $shortcutPath -Force }
+        Set-Status 'Removed from startup.'
+        Write-AppLog "Startup entry removed from $shortcutPath"
+        Send-DesktopNotification $AppName 'Removed from Windows startup.'
+    } catch {
+        $msg = "Failed to remove from startup: $($_.Exception.Message)"
+        Set-Status $msg
+        Write-AppLog $msg
+        Send-DesktopNotification $AppName $msg
+    } finally {
+        Update-StartupButtons
+    }
+}
+
+function Save-Only {
+    try {
+        Update-ConfigFromForm
+        Save-AppConfig $script:Config
+        Set-Status 'Settings saved.'
+    } catch {
+        $msg = "Failed to save settings: $($_.Exception.Message)"
+        Set-Status $msg
+        Write-AppLog $msg
+    }
+}
+
+function Save-And-Restart {
+    try {
+        Update-ConfigFromForm
+        Save-AppConfig $script:Config
+        Set-Status 'Settings saved. Restarting monitor...'
+        Restart-Monitoring
+    } catch {
+        $msg = "Failed to save settings: $($_.Exception.Message)"
+        Set-Status $msg
+        Write-AppLog $msg
+    }
+}
+
+function Quit-App {
+    if($script:IsQuitting){ return }
+    $script:IsQuitting = $true
+    Stop-Monitoring
+    if($script:TrayIcon){
+        try {
+            $script:TrayIcon.Visible = $false
+            $script:TrayIcon.Dispose()
+        } catch {}
+        $script:TrayIcon = $null
+    }
+    [System.Windows.Forms.Application]::Exit()
+}
+
+function Show-Window {
+    if($script:Controls.Form){
+        $form = $script:Controls.Form
+        $form.Show()
+        $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+        $form.Activate()
+    }
+}
+
+function Hide-Window {
+    if($script:Controls.Form -and -not $script:IsQuitting){
+        $script:Controls.Form.Hide()
+        Set-Status 'Settings window hidden. Use the tray icon to reopen or quit.'
+    }
+}
+function Build-UI {
+    Param([pscustomobject]$Config)
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "$AppName (Windows)"
+    $form.StartPosition = 'CenterScreen'
+    $form.Size = New-Object System.Drawing.Size(780, 520)
+    $form.MinimumSize = New-Object System.Drawing.Size(680, 480)
+
+    $layout = New-Object System.Windows.Forms.TableLayoutPanel
+    $layout.Dock = 'Fill'
+    $layout.Padding = New-Object System.Windows.Forms.Padding(12)
+    $layout.ColumnCount = 4
+    $layout.RowCount = 6
+    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+
+    $labelInstall = New-Object System.Windows.Forms.Label
+    $labelInstall.Text = 'Install Folder (logs/cache):'
+    $labelInstall.AutoSize = $true
+    $layout.Controls.Add($labelInstall, 0, 0)
+
+    $installBox = New-Object System.Windows.Forms.TextBox
+    $installBox.Text = $Config.InstallDir
+    $installBox.Dock = 'Fill'
+    $layout.Controls.Add($installBox, 1, 0)
+    $layout.SetColumnSpan($installBox, 2)
+
+    $browseInstall = New-Object System.Windows.Forms.Button
+    $browseInstall.Text = 'Browse…'
+    $browseInstall.AutoSize = $true
+    $layout.Controls.Add($browseInstall, 3, 0)
+    $browseInstall.Add_Click({
+        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dialog.SelectedPath = $installBox.Text
+        if($dialog.ShowDialog() -eq 'OK'){
+            $installBox.Text = $dialog.SelectedPath
+        }
+    })
+
+    $labelLog = New-Object System.Windows.Forms.Label
+    $labelLog.Text = 'VRChat Log Folder:'
+    $labelLog.AutoSize = $true
+    $layout.Controls.Add($labelLog, 0, 1)
+
+    $logBox = New-Object System.Windows.Forms.TextBox
+    $logBox.Text = $Config.VRChatLogDir
+    $logBox.Dock = 'Fill'
+    $layout.Controls.Add($logBox, 1, 1)
+    $layout.SetColumnSpan($logBox, 2)
+
+    $browseLog = New-Object System.Windows.Forms.Button
+    $browseLog.Text = 'Browse…'
+    $browseLog.AutoSize = $true
+    $layout.Controls.Add($browseLog, 3, 1)
+    $browseLog.Add_Click({
+        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dialog.SelectedPath = $logBox.Text
+        if($dialog.ShowDialog() -eq 'OK'){
+            $logBox.Text = $dialog.SelectedPath
+        }
+    })
+
+    $labelPO = New-Object System.Windows.Forms.Label
+    $labelPO.Text = 'Pushover Credentials:'
+    $labelPO.AutoSize = $true
+    $layout.Controls.Add($labelPO, 0, 2)
+
+    $poPanel = New-Object System.Windows.Forms.TableLayoutPanel
+    $poPanel.ColumnCount = 4
+    $poPanel.Dock = 'Fill'
+    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+
+    $poUserLabel = New-Object System.Windows.Forms.Label
+    $poUserLabel.Text = 'User Key:'
+    $poUserLabel.AutoSize = $true
+    $poPanel.Controls.Add($poUserLabel, 0, 0)
+
+    $poUserBox = New-Object System.Windows.Forms.TextBox
+    $poUserBox.Text = $Config.PushoverUser
+    $poUserBox.UseSystemPasswordChar = $true
+    $poUserBox.Dock = 'Fill'
+    $poPanel.Controls.Add($poUserBox, 1, 0)
+
+    $poTokenLabel = New-Object System.Windows.Forms.Label
+    $poTokenLabel.Text = 'API Token:'
+    $poTokenLabel.AutoSize = $true
+    $poPanel.Controls.Add($poTokenLabel, 2, 0)
+
+    $poTokenBox = New-Object System.Windows.Forms.TextBox
+    $poTokenBox.Text = $Config.PushoverToken
+    $poTokenBox.UseSystemPasswordChar = $true
+    $poTokenBox.Dock = 'Fill'
+    $poPanel.Controls.Add($poTokenBox, 3, 0)
+
+    $layout.Controls.Add($poPanel, 1, 2)
+    $layout.SetColumnSpan($poPanel, 3)
+
+    $buttonPanel = New-Object System.Windows.Forms.TableLayoutPanel
+    $buttonPanel.ColumnCount = 4
+    $buttonPanel.Dock = 'Top'
+    foreach($i in 0..3){ $buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
+
+    $saveRestart = New-Object System.Windows.Forms.Button
+    $saveRestart.Text = 'Save && Restart Monitoring'
+    $saveRestart.Dock = 'Fill'
+    $buttonPanel.Controls.Add($saveRestart, 0, 0)
+    $saveRestart.Add_Click({ Save-And-Restart })
+
+    $startBtn = New-Object System.Windows.Forms.Button
+    $startBtn.Text = 'Start Monitoring'
+    $startBtn.Dock = 'Fill'
+    $buttonPanel.Controls.Add($startBtn, 1, 0)
+    $startBtn.Add_Click({ Start-Monitoring })
+
+    $stopBtn = New-Object System.Windows.Forms.Button
+    $stopBtn.Text = 'Stop Monitoring'
+    $stopBtn.Dock = 'Fill'
+    $buttonPanel.Controls.Add($stopBtn, 2, 0)
+    $stopBtn.Add_Click({ Stop-Monitoring })
+
+    $quitBtn = New-Object System.Windows.Forms.Button
+    $quitBtn.Text = 'Quit'
+    $quitBtn.Dock = 'Fill'
+    $buttonPanel.Controls.Add($quitBtn, 3, 0)
+    $quitBtn.Add_Click({ Quit-App })
+
+    $layout.Controls.Add($buttonPanel, 0, 3)
+    $layout.SetColumnSpan($buttonPanel, 4)
+
+    $extraPanel = New-Object System.Windows.Forms.TableLayoutPanel
+    $extraPanel.ColumnCount = 4
+    $extraPanel.Dock = 'Top'
+    foreach($i in 0..3){ $extraPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
+
+    $addStartup = New-Object System.Windows.Forms.Button
+    $addStartup.Text = 'Add to Startup'
+    $addStartup.Dock = 'Fill'
+    $extraPanel.Controls.Add($addStartup, 0, 0)
+    $addStartup.Add_Click({ Add-ToStartup })
+
+    $removeStartup = New-Object System.Windows.Forms.Button
+    $removeStartup.Text = 'Remove from Startup'
+    $removeStartup.Dock = 'Fill'
+    $extraPanel.Controls.Add($removeStartup, 1, 0)
+    $removeStartup.Add_Click({ Remove-FromStartup })
+
+    $saveBtn = New-Object System.Windows.Forms.Button
+    $saveBtn.Text = 'Save'
+    $saveBtn.Dock = 'Fill'
+    $extraPanel.Controls.Add($saveBtn, 2, 0)
+    $saveBtn.Add_Click({ Save-Only })
+
+    $layout.Controls.Add($extraPanel, 0, 4)
+    $layout.SetColumnSpan($extraPanel, 4)
+
+    $statusGroup = New-Object System.Windows.Forms.GroupBox
+    $statusGroup.Text = 'Status'
+    $statusGroup.Dock = 'Fill'
+
+    $statusTable = New-Object System.Windows.Forms.TableLayoutPanel
+    $statusTable.Dock = 'Fill'
+    $statusTable.ColumnCount = 2
+    $statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+
+    $addStatusRow = {
+        param([System.Windows.Forms.TableLayoutPanel]$Table, [string]$LabelText)
+        $row = $Table.RowCount
+        $Table.RowCount++
+        $Table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = $LabelText
+        $label.AutoSize = $true
+        $Table.Controls.Add($label, 0, $row)
+        $value = New-Object System.Windows.Forms.Label
+        $value.Text = ''
+        $value.AutoSize = $true
+        $value.MaximumSize = New-Object System.Drawing.Size(520, 0)
+        $Table.Controls.Add($value, 1, $row)
+        return $value
+    }
+
+    $statusValue = & $addStatusRow $statusTable 'Status:'
+    $monitorValue = & $addStatusRow $statusTable 'Monitoring:'
+    $currentLogValue = & $addStatusRow $statusTable 'Current log:'
+    $sessionValue = & $addStatusRow $statusTable 'Session:'
+    $lastEventValue = & $addStatusRow $statusTable 'Last event:'
+
+    $statusGroup.Controls.Add($statusTable)
+    $layout.Controls.Add($statusGroup, 0, 5)
+    $layout.SetColumnSpan($statusGroup, 4)
+
+    $form.Controls.Add($layout)
+
+    $form.Add_FormClosing({ param($sender,$e)
+        if(-not $script:IsQuitting){
+            $e.Cancel = $true
+            Hide-Window
+        }
+    })
+
+    $form.Add_Resize({
+        if($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized -and -not $script:IsQuitting){
+            Hide-Window
+        }
+    })
+
+    $script:Controls = @{
+        Form          = $form
+        Install       = $installBox
+        LogDir        = $logBox
+        POUser        = $poUserBox
+        POToken       = $poTokenBox
+        Status        = $statusValue
+        MonitorStatus = $monitorValue
+        CurrentLog    = $currentLogValue
+        Session       = $sessionValue
+        LastEvent     = $lastEventValue
+        AddStartup    = $addStartup
+        RemoveStartup = $removeStartup
+    }
+
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 200
+    $timer.Add_Tick({ Process-Events })
+    $timer.Start()
+
+    return $form
+}
+
+function Build-Tray {
+    $icon = Get-AppIcon
+    $tray = New-Object System.Windows.Forms.NotifyIcon
+    $tray.Icon = $icon
+    $tray.Visible = $true
+    $tray.Text = $AppName
+
+    $menu = New-Object System.Windows.Forms.ContextMenuStrip
+    $openItem = $menu.Items.Add('Open Settings')
+    $openItem.Add_Click({ Show-Window })
+    $menu.Items.Add('-') | Out-Null
+    $startItem = $menu.Items.Add('Start Monitoring')
+    $startItem.Add_Click({ Start-Monitoring })
+    $stopItem = $menu.Items.Add('Stop Monitoring')
+    $stopItem.Add_Click({ Stop-Monitoring })
+    $restartItem = $menu.Items.Add('Save && Restart Monitoring')
+    $restartItem.Add_Click({ Save-And-Restart })
+    $menu.Items.Add('-') | Out-Null
+    $quitItem = $menu.Items.Add('Quit')
+    $quitItem.Add_Click({ Quit-App })
+
+    $tray.ContextMenuStrip = $menu
+    $tray.Add_DoubleClick({ Show-Window })
+
+    $script:TrayIcon = $tray
+}
+
+function Apply-StartupState {
+    if($script:LoadError){
+        Set-Status $script:LoadError
+        Show-Window
+        return
+    }
+    if($script:Config.FirstRun){
+        Set-Status 'Welcome! Configure your install and log folders, optionally add Pushover keys, then click Save & Restart Monitoring.'
+        Show-Window
+        return
+    }
+    if($script:Config.PushoverUser -and $script:Config.PushoverToken){
+        Start-Monitoring
+        if($OpenSettings){
+            Show-Window
+        } else {
+            Hide-Window
+        }
+        return
+    }
+    Set-Status 'Optional: add your Pushover credentials, then click Save & Restart Monitoring when ready.'
+    Show-Window
+}
+
+function Main {
+    $result = Load-AppConfig
+    $script:Config = $result[0]
+    $script:LoadError = $result[1]
+    $form = Build-UI $script:Config
+    Update-StartupButtons
+    Build-Tray
+    Update-TrayState
+    Apply-StartupState
+    if($script:LoadError){
+        [System.Windows.Forms.MessageBox]::Show($script:LoadError, $AppName, 'OK', 'Error') | Out-Null
+    }
+    [System.Windows.Forms.Application]::Run($form)
 }
 
 Main
-
-# Build to EXE (Windows PowerShell)
-Install-Module ps2exe -Scope CurrentUser -Force
-Invoke-ps2exe -InputFile .\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
-  -Title 'VRChat Join Notifier' -IconFile .\vrchat_join_notification\notification.ico -NoConsole -STA -x64
-#>
-
