@@ -152,7 +152,7 @@ Run the command that gets added to your `$PATH`:
 vrchat-join-notifier
 ```
 
-The GUI opens automatically on the first launch. Configure the following:
+The GUI opens automatically on the first launch and smartly sizes itself so every control stays visible, even with larger desktop scaling. Configure the following:
 
 - **Install Folder (logs/cache):** Location where the app stores its config and log files (`~/.local/share/vrchat-join-notification-with-pushover` by default).
 - **VRChat Log Folder:** Your Proton prefix path containing the VRChat logs. Common Steam installs are detected automatically, but you can browse to a custom directory if needed.
