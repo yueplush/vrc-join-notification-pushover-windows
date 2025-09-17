@@ -1177,8 +1177,9 @@ function Main{
 
 Main
 
-<# Build to EXE (Windows PowerShell)
+# Build to EXE (Windows PowerShell)
 Install-Module ps2exe -Scope CurrentUser -Force
-Invoke-ps2exe -InputFile .\VRChatJoinNotifier.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
+Invoke-ps2exe -InputFile .\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
   -Title 'VRChat Join Notifier' -IconFile .\notification.ico -NoConsole -STA -x64
 #>
+
