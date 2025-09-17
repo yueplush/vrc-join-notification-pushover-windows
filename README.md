@@ -20,7 +20,7 @@ The original script lives in `VRChatJoinNotifier.ps1`.
 
 ```powershell
 # Convert to an EXE (requires ps2exe)
-Invoke-ps2exe .\VRChatJoinNotifier.ps1 .\vrchat-join-notifier.exe `
+Invoke-ps2exe .\VRChatJoinNotifier.ps1 .\vrchat-join-notification-with-pushover.exe `
   -NoConsole -Title "VRChat Join Notifier" -Icon .\notification.ico
 ```
 
