@@ -37,6 +37,7 @@ $SessionFallbackMaxContinuationSeconds = 4 # require OnJoinedRoom to arrive quic
 $script:LastNotified = @{}
 $script:SessionId = 0         # increments on each detected session
 $script:SeenPlayers = @{}     # join key -> first seen time (per session)
+$script:LocalUserId = $null   # tracks the local player's userId when known (lowercase)
 $script:SessionLastJoinAt = $null
 $script:SessionReady = $false # true once current session started
 $script:SessionSource = ''    # remember how the session started
@@ -75,6 +76,7 @@ function Reset-SessionState{
   $script:SessionReady = $false
   $script:SessionSource = ''
   $script:SeenPlayers = @{}
+  $script:LocalUserId = $null
   $script:SessionStartedAt = $null
   $script:SessionLastJoinAt = $null
   $script:PendingRoom = $null
@@ -140,6 +142,11 @@ function Normalize-JoinName([string]$Name){
   if($clean.Length -gt 160){ $clean = $clean.Substring(0,160).Trim() }
   if($clean -match '^[\-:|–—]+$'){ return $null }
   return $clean
+}
+function Is-PlaceholderName([string]$Name){
+  if([string]::IsNullOrWhiteSpace($Name)){ return $true }
+  $trimmed = $Name.Trim().ToLowerInvariant()
+  return @('player','you','someone','a player').Contains($trimmed)
 }
 function Get-ShortHash([string]$Text){
   if([string]::IsNullOrEmpty($Text)){ return '' }
@@ -422,7 +429,6 @@ function Start-Follow{
       }
 
       if(-not $displayName -and $userId){ $displayName = $userId }
-      if(-not $displayName){ $displayName = 'Someone' }
 
       return [pscustomobject]@{ Name=$displayName; UserId=$userId }
     }
@@ -585,13 +591,12 @@ function Start-Follow{
           }
           if($reLeave.IsMatch($line)){
             $parsedLeave = Parse-PlayerEventLine $line 'OnPlayerLeft'
-            $leaveName = 'Someone'
+            $leaveName = ''
             $leaveUserId = ''
             if($parsedLeave){
               if($parsedLeave.Name){ $leaveName = $parsedLeave.Name }
               if($parsedLeave.UserId){ $leaveUserId = $parsedLeave.UserId }
             }
-            if([string]::IsNullOrWhiteSpace($leaveName)){ $leaveName='Someone' }
             $safeLeaveName = ($leaveName -replace '\|\|','|')
             $safeLeaveUser = ($leaveUserId -replace '\|\|','|')
             Write-Output ("PLAYER_LEAVE||" + $safeLeaveName + "||" + $safeLeaveUser + "||" + $line)
@@ -600,13 +605,12 @@ function Start-Follow{
 
           if($reJoin.IsMatch($line)){
             $parsed = Parse-PlayerEventLine $line 'OnPlayerJoined'
-            $name = 'Someone'
+            $name = ''
             $userId = ''
             if($parsed){
               if($parsed.Name){ $name = $parsed.Name }
               if($parsed.UserId){ $userId = $parsed.UserId }
             }
-            if([string]::IsNullOrWhiteSpace($name)){ $name='Someone' }
             $safeName = ($name -replace '\|\|','|')
             $safeUser = ($userId -replace '\|\|','|')
             Write-Output ("PLAYER_JOIN||" + $safeName + "||" + $safeUser + "||" + $line)
@@ -792,7 +796,6 @@ function Process-FollowOutput {
         }
 
         $name = Normalize-JoinName $rawName
-        if(-not $name){ $name = 'Someone' }
 
         $userId = $null
         if(-not [string]::IsNullOrWhiteSpace($rawUserId)){
@@ -800,9 +803,26 @@ function Process-FollowOutput {
           if(-not [string]::IsNullOrWhiteSpace($tmpUser)){ $userId = $tmpUser }
         }
 
+        $userKey = $null
+        if($userId){ $userKey = $userId.ToLowerInvariant() }
+
+        $isPlaceholder = Is-PlaceholderName $name
+        if($isPlaceholder -and $userKey){
+          if(-not $script:LocalUserId){
+            $script:LocalUserId = $userKey
+            Write-AppLog ("Learned local userId from leave event: " + $userId)
+          }elseif($script:LocalUserId -eq $userKey){
+            $name = $userId
+            $isPlaceholder = $false
+          }
+        }
+
+        if(-not $name -and $userId){ $name = $userId; $isPlaceholder = $false }
+        if(-not $name){ $name = 'Unknown VRChat user' }
+
         $removedCount = 0
-        if($userId){
-          $keyPrefix = "join:{0}:{1}" -f $script:SessionId,$userId.ToLowerInvariant()
+        if($userKey){
+          $keyPrefix = "join:{0}:{1}" -f $script:SessionId,$userKey
           $keysToRemove = @()
           foreach($existingKey in @($script:SeenPlayers.Keys)){
             if($existingKey.StartsWith($keyPrefix)){
@@ -824,9 +844,6 @@ function Process-FollowOutput {
         }
         $logLine += '.'
         Write-AppLog $logLine
-        if($name -eq 'Someone' -and -not [string]::IsNullOrWhiteSpace($rawLine)){
-          Write-AppLog ("Leave parse fallback for line: " + $rawLine)
-        }
         continue
       }
 
@@ -846,7 +863,6 @@ function Process-FollowOutput {
         }
 
         $name = Normalize-JoinName $rawName
-        if(-not $name){ $name = 'Someone' }
 
         $userId = $null
         if(-not [string]::IsNullOrWhiteSpace($rawUserId)){
@@ -854,10 +870,43 @@ function Process-FollowOutput {
           if(-not [string]::IsNullOrWhiteSpace($tmpUser)){ $userId = $tmpUser }
         }
 
+        $userKey = $null
+        if($userId){ $userKey = $userId.ToLowerInvariant() }
+
         $eventTime = Get-Date
         $script:SessionLastJoinAt = $eventTime
 
-        $keyBase = if($userId){ $userId.ToLowerInvariant() } else { $name.ToLowerInvariant() }
+        if($userKey -and $script:LocalUserId -and $userKey -eq $script:LocalUserId){
+          Write-AppLog ("Skipping join for known local userId '" + $userId + "'.")
+          continue
+        }
+
+        $isPlaceholder = Is-PlaceholderName $name
+        $isFallbackSession = ($script:SessionSource -eq 'OnPlayerJoined fallback')
+        if($isPlaceholder -and $userKey){
+          if($isFallbackSession -and -not $script:LocalUserId){
+            $script:LocalUserId = $userKey
+            Write-AppLog ("Learned local userId from join event: " + $userId)
+            Write-AppLog ("Skipping initial local join placeholder for userId '" + $userId + "'.")
+            continue
+          }
+          if($script:LocalUserId -and $script:LocalUserId -eq $userKey){
+            Write-AppLog ("Skipping local join placeholder for userId '" + $userId + "'.")
+            continue
+          }
+        }
+
+        if(-not $name -and $userId){
+          $name = $userId
+          $isPlaceholder = $false
+        }elseif($isPlaceholder -and $userId){
+          $name = $userId
+          $isPlaceholder = $false
+        }
+
+        if(-not $name){ $name = 'Unknown VRChat user' }
+
+        $keyBase = if($userKey){ $userKey } else { $name.ToLowerInvariant() }
         $hashSuffix = ''
         if(-not $userId -and -not [string]::IsNullOrWhiteSpace($rawLine)){
           $hashSuffix = Get-ShortHash $rawLine
@@ -875,9 +924,6 @@ function Process-FollowOutput {
           if($userId){ $logLine += " (" + $userId + ")" }
           $logLine += '.'
           Write-AppLog $logLine
-          if($name -eq 'Someone' -and -not [string]::IsNullOrWhiteSpace($rawLine)){
-            Write-AppLog ("Join parse fallback for line: " + $rawLine)
-          }
         }
         continue
       }
