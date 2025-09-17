@@ -61,3 +61,6 @@ custom install folders).
 
 Desktop notifications mirror the Windows behaviour and Pushover pushes share
 the same cooldown logic, so you will only see one alert per unique event.
+
+### Buy Me Coffee
+I accept coffee fee, in this sites (JPY)
