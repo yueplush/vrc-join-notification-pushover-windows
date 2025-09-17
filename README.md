@@ -49,6 +49,7 @@ cd vrchat-join-notification-with-pushover
      -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
    ```
 3. Use the tray icon to open **Settings**, configure your VRChat log directory and (optionally) Pushover credentials, then start monitoring.
+   The Windows tray tooltip now reflects the simplified app label **System Notification** while keeping all functionality unchanged.
 
 > [!NOTE]
 > The Windows script now builds its dash characters at runtime from explicit Unicode code points. This preserves the existing behavior while ensuring Windows PowerShell 5.1 parses the file correctly on Shift-JIS based systems.
