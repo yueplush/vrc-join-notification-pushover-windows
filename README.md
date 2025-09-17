@@ -87,8 +87,6 @@ Example package installs:
 Clone this repository (if you have not already) and install it with `pip` (optionally enabling tray support):
 
 ```bash
-git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-cd vrchat-join-notification-with-pushover
 python3 -m pip install --user .
 # or include the system tray extras
 python3 -m pip install --user '.[tray]'
