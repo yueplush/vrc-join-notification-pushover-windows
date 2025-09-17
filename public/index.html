@@ -6,140 +6,182 @@
     <title>VRChat Join Notifier with Pushover</title>
     <meta
       name="description"
-      content="VRChat Join Notifier with Pushoverの配布ページ。VRChatのフレンドがインスタンスに参加した瞬間を逃さずキャッチ。"
+      content="VRChat Join Notifier with Pushoverは、VRChatのログを監視して参加イベントをWindows・Linux・Pushoverへ通知するツールです。"
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div id="gradient-overlay"></div>
-    <div id="floating-icons"></div>
-    <header class="hero">
-      <nav class="top-nav">
-        <div class="logo">VRChat Join Notifier with pushover</div>
-        <a class="cta" href="#download">ダウンロード</a>
-      </nav>
-      <div class="hero-content">
-        <div class="hero-text">
-          <p class="label">いつでもフレンドとシンクロ</p>
-          <h1>インスタンス参加をリアルタイムでキャッチ</h1>
-          <p class="lead">
-            VRChatのログを監視し、フレンドやプレイヤーが参加した瞬間をデスクトップとPushoverで通知。<br />
-            WindowsとLinuxに対応したスマートな常駐アプリです。
-          </p>
-          <div class="cta-group">
-            <a class="button primary" href="#download">今すぐ入手</a>
-            <a class="button ghost" href="https://github.com/tymm84/vrchat-join-notification-with-pushover" target="_blank" rel="noopener">
-              GitHubで詳細を見る
-            </a>
+    <div class="background-layers">
+      <div class="background-grid"></div>
+      <div id="motion-trails" aria-hidden="true"></div>
+    </div>
+    <header class="site-header">
+      <div class="container header-inner">
+        <div class="logo">VRChat Join Notifier</div>
+        <nav class="nav-links">
+          <a href="#features">機能</a>
+          <a href="#workflow">動作概要</a>
+          <a class="nav-download" href="#download">ダウンロード</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section class="hero" id="overview">
+        <div class="container hero-layout">
+          <div class="hero-copy">
+            <p class="eyebrow">ログ監視 + デスクトップ通知 + Pushover</p>
+            <h1>実装された通知だけを静かに届ける常駐ツール</h1>
+            <p class="hero-lead">
+              VRChatのログから <code>OnPlayerJoined</code> と <code>OnJoinedRoom</code> を検出し、Windowsトースト・Linuxのlibnotify・Pushoverへ即時に伝えます。
+              ローカルで完結し、VRChat.exeが起動しているときだけ監視します。
+            </p>
+            <ul class="hero-points">
+              <li>最新のログファイルへ自動追従し重複通知は10秒クールダウンで抑制</li>
+              <li>Windowsはトレイ常駐+GUI設定、LinuxはTk GUIとシステム通知</li>
+              <li>Pushoverキーを設定すれば外出先でも同じ内容を受信</li>
+            </ul>
+            <div class="hero-actions">
+              <a class="button primary" href="#download">ダウンロード</a>
+              <a
+                class="button ghost"
+                href="https://github.com/tymm84/vrchat-join-notification-with-pushover"
+                target="_blank"
+                rel="noopener"
+                >GitHubでソースを見る</a
+              >
+            </div>
           </div>
-        </div>
-        <div class="hero-visual">
-          <div class="glass-card">
-            <span class="glass-label">通知プレビュー</span>
-            <h2>Player123が参加しました！</h2>
-            <p>あなたのワールドに新しい仲間が来ています。さあ挨拶に行きましょう！</p>
-            <div class="status-bar">
-              <div class="pulse"></div>
-              <span>モニタリング中…</span>
+          <div class="hero-panel">
+            <div class="panel-card" role="presentation">
+              <span class="panel-label">通知サンプル</span>
+              <p class="panel-title">SampleUserがワールドに参加しました</p>
+              <p class="panel-text">同じプレイヤーはクールダウン中に再通知しません。</p>
+              <dl class="panel-meta">
+                <div>
+                  <dt>対応OS</dt>
+                  <dd>Windows PowerShell / Linux Python</dd>
+                </div>
+                <div>
+                  <dt>通知方式</dt>
+                  <dd>Windowsトースト、libnotify、Pushover</dd>
+                </div>
+                <div>
+                  <dt>設定</dt>
+                  <dd>GUIで保存 &amp; 起動時に復元</dd>
+                </div>
+              </dl>
             </div>
           </div>
         </div>
-      </div>
-      <div class="scroll-indicator">スクロールで詳細を見る</div>
-    </header>
-
-    <main>
-      <section class="features" id="features">
-        <h2>このアプリが選ばれる理由</h2>
-        <div class="feature-grid">
-          <article class="feature-card">
-            <h3>リアルタイム通知</h3>
-            <p>
-              VRChatログを賢く解析し、インスタンス参加イベントを瞬時に通知。重複通知を防ぐクールダウン機能付き。
-            </p>
-          </article>
-          <article class="feature-card">
-            <h3>クロスプラットフォーム</h3>
-            <p>Windows PowerShell版とLinux向けPython版を同梱。環境に合わせたUIと通知方法を用意しています。</p>
-          </article>
-          <article class="feature-card">
-            <h3>Pushover連携</h3>
-            <p>デスクトップ通知に加えてPushoverにも対応。外出先でもフレンドの合流を見逃しません。</p>
-          </article>
-          <article class="feature-card">
-            <h3>設定は数クリック</h3>
-            <p>直感的な設定画面でログフォルダやPushoverキーを指定。保存した設定は次回起動時にも自動復元。</p>
-          </article>
-        </div>
       </section>
 
-      <section class="showcase">
-        <div class="showcase-text">
-          <h2>ゲームの集中を邪魔しない、スマートなモニタリング</h2>
-          <p>
-            監視中はトレイアイコンやバックグラウンドで静かに待機。フレンドが参加した瞬間だけ、きらめく通知が届きます。
-            Linux版はnotify-sendを利用したネイティブ通知、Windows版はトースト通知を採用しています。
-          </p>
-          <ul>
-            <li>オンプレミス実行でプライバシーを保護</li>
-            <li>ログ切り替え時も自動で最新ファイルを追跡</li>
-            <li>プロファイル毎にカスタムクールダウンを設定可能</li>
-          </ul>
-        </div>
-        <div class="showcase-visual">
-          <div class="orbit">
-            <div class="orbit-core">VRChat</div>
-            <div class="orbit-ring ring-one"></div>
-            <div class="orbit-ring ring-two"></div>
-            <div class="orbit-ring ring-three"></div>
+      <section class="section" id="features">
+        <div class="container">
+          <h2>実装済みの主な機能</h2>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <h3>VRChatログのリアルタイム解析</h3>
+              <p>
+                出力ログとPlayer.logの最新ファイルを監視し、セッションが切り替わっても自動で追従。
+                VRChat.exeの起動状態を確認し、起動中のみ監視処理を走らせます。
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>確実な通知チャンネル</h3>
+              <p>
+                WindowsではBurntToastトースト通知に対応（未導入時はバルーン通知）。
+                Linuxではnotify-sendを呼び出し、同じ内容をPushoverに送信できます。
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>GUIで完結する設定</h3>
+              <p>
+                監視するログフォルダとPushoverキーをフォームで入力し、そのまま保存。
+                設定ファイルとログはユーザー領域に記録され、次回起動時に自動復元されます。
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>セッション管理とクールダウン</h3>
+              <p>
+                プレイヤーごとに参加時刻を記録し、重複通知を避ける10秒クールダウンを実装。
+                セッション開始時にはトレイツールチップとログに記録します。
+              </p>
+            </article>
           </div>
         </div>
       </section>
 
-      <section class="download" id="download">
-        <h2>ダウンロード</h2>
-        <p>
-          現在はスクリプト形式で配布しています。PowerShell版はそのまま実行するか、ps2exeを使ってEXE化できます。
-          Linux版はPython 3とTkが動作する環境で動きます。
-        </p>
-        <div class="download-grid">
-          <a class="download-card" href="VRChatJoinNotifier.ps1">
-            <h3>Windows版 (PowerShell)</h3>
-            <p>トレイアイコンとGUI付きのPowerShellスクリプト。</p>
-            <span class="download-action">.ps1をダウンロード</span>
-          </a>
-          <a class="download-card" href="VRChatJoinNotifier_linux.py">
-            <h3>Linux版 (Python)</h3>
-            <p>Tk GUIとnotify-send通知を備えたPythonスクリプト。</p>
-            <span class="download-action">.pyをダウンロード</span>
-          </a>
-          <a class="download-card" href="README.md">
-            <h3>セットアップガイド</h3>
-            <p>詳しい使い方や必要要件はREADMEをご確認ください。</p>
-            <span class="download-action">ドキュメントを読む</span>
-          </a>
+      <section class="section muted" id="workflow">
+        <div class="container workflow">
+          <div>
+            <h2>動作概要</h2>
+            <p>
+              すべての処理はローカル環境で行われます。ログ解析、GUI、Pushover送信のそれぞれが独立しており、実装済みの挙動だけを行います。
+            </p>
+            <ul class="workflow-points">
+              <li><strong>ログ監視:</strong> VRChatのログディレクトリを監視し、新しいファイルを検知すると即座に切り替えます。</li>
+              <li><strong>イベント抽出:</strong> OnPlayerJoined / OnJoinedRoomの行からプレイヤー名を正規化して抽出します。</li>
+              <li><strong>通知処理:</strong> デスクトップ通知とPushover送信は同じ本文で実行され、成功・失敗はローカルログに記録します。</li>
+            </ul>
+          </div>
+          <aside class="workflow-aside">
+            <h3>必要環境</h3>
+            <ul>
+              <li>Windows 10/11 + PowerShell 5.1 以上</li>
+              <li>Linux + Python 3 + Tk + libnotify</li>
+              <li>Pushover APIトークン &amp; ユーザーキー（任意機能）</li>
+            </ul>
+            <p class="aside-note">Pushoverを使わない場合は設定欄を空にしておけば送信されません。</p>
+          </aside>
         </div>
-        <div class="note">
-          <strong>ヒント:</strong> Pushover連携を利用するにはAPIトークンとユーザーキーが必要です。
+      </section>
+
+      <section class="section" id="download">
+        <div class="container">
+          <h2>ダウンロード</h2>
+          <p class="section-lead">
+            スクリプト形式で提供しています。PowerShell版はそのまま実行するか、お好みでps2exeでバイナリ化できます。
+            Linux版はPython 3とTkが利用できる環境でそのまま起動できます。
+          </p>
+          <div class="download-grid">
+            <a class="download-card" href="VRChatJoinNotifier.ps1">
+              <h3>Windows版 (PowerShell)</h3>
+              <p>トレイアイコンとGUI付きのPowerShellスクリプト。</p>
+              <span class="download-action">.ps1を入手</span>
+            </a>
+            <a class="download-card" href="VRChatJoinNotifier_linux.py">
+              <h3>Linux版 (Python)</h3>
+              <p>Tk GUIとnotify-send連携を備えたPythonスクリプト。</p>
+              <span class="download-action">.pyを入手</span>
+            </a>
+            <a class="download-card" href="README.md">
+              <h3>セットアップガイド</h3>
+              <p>詳しい使い方と必要要件はREADMEを参照してください。</p>
+              <span class="download-action">ドキュメントを読む</span>
+            </a>
+          </div>
+          <div class="note">
+            <strong>メモ:</strong> VRChatログフォルダとPushoverキーは設定画面からいつでも変更できます。
+          </div>
         </div>
       </section>
     </main>
 
-    <footer>
-      <div class="footer-content">
+    <footer class="site-footer">
+      <div class="container footer-inner">
         <div>
-          <h4>VRChat Join Notifier with pushover</h4>
-          <p>オープンソースで開発されているVRChat向け通知ツールです。</p>
+          <h4>VRChat Join Notifier with Pushover</h4>
+          <p>VRChatの参加通知をローカルで完結させるオープンソースツールです。</p>
         </div>
         <div class="footer-links">
           <a href="https://github.com/tymm84/vrchat-join-notification-with-pushover" target="_blank" rel="noopener">GitHub</a>
-          <a href="#features">機能紹介</a>
+          <a href="#features">機能</a>
           <a href="#download">ダウンロード</a>
         </div>
       </div>
