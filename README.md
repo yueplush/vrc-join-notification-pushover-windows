@@ -9,14 +9,14 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 - Silently ignores the redundant generic desktop toast (`A player joined your instance.`) so only the richer, name-aware notification remains on Windows and Linux.
 - Debounces duplicate events with configurable cooldowns.
 - Optional Pushover integration in addition to local desktop notifications.
-- Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing).
+- Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing). The Windows window now matches the Linux layout, including the live status fields.
 - Linux build offers one-click login startup integration that writes/removes the `.desktop` autostart entry for you and confirms the action with a desktop notification.
 
 ## Repository layout
 
 | Path | Description |
 | --- | --- |
-| `src/vrchat-join-notification-with-pushover.ps1` | Original Windows PowerShell implementation. |
+| `src/vrchat-join-notification-with-pushover.ps1` | Windows PowerShell implementation that mirrors the Linux app. |
 | `src/vrchat-join-notification-with-pushover_linux.py` | Compatibility shim that launches the packaged Linux app. |
 | `src/vrchat_join_notification/` | Installable Python package that provides the Linux GUI and notifier logic. |
 
@@ -48,11 +48,11 @@ cd vrchat-join-notification-with-pushover
    Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
      -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
    ```
-3. Use the tray icon to open **Settings**, configure your VRChat log directory and (optionally) Pushover credentials, then start monitoring.
-   The Windows tray tooltip now reflects the simplified app label **System Notification** while keeping all functionality unchanged.
+3. Open **Settings** from the tray icon (or via the window) to configure the install/cache folder, VRChat log directory, and optional Pushover credentials.
+   The WinForms UI now mirrors the Linux layout with live **Status**, **Monitoring**, **Current Log**, **Session**, and **Last Event** indicators so you can see exactly what the watcher is doing.
 
 > [!NOTE]
-> The Windows script now rebuilds every non-ASCII symbol (dashes, Japanese log phrases, etc.) from explicit Unicode code points at runtime. This keeps localized log detection intact while ensuring Windows PowerShell 5.1 parses the file correctly on Shift-JIS based systems and during `ps2exe` builds.
+> The rewritten Windows script uses the same parsing and session logic as the Linux edition, including Unicode-safe string handling. All non-ASCII characters (Japanese log phrases, dash variants, etc.) are emitted explicitly so Windows PowerShell 5.1 and `ps2exe` builds remain reliable on localized systems.
 
 ---
 
