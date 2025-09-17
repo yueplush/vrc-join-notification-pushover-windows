@@ -33,7 +33,7 @@ git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
 # Build to EXE (Windows PowerShell)
 Install-Module ps2exe -Scope CurrentUser -Force
 Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
-  -Title 'VRChat Join Notification with Pushover' -IconFile .\src\notification.ico -NoConsole -STA -x64
+  -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
 ```
 
 Run the script (or compiled EXE) and use the tray icon to open the settings
@@ -42,8 +42,30 @@ start monitoring.
 
 ## Linux (Python)
 
-A native Linux port with a Tk GUI is provided in
-`vrchat-join-notification-with-pushover_linux.py`.
+A native Linux port with a Tk GUI now ships as an installable Python package.
+The legacy script entry point (`vrchat-join-notification-with-pushover_linux.py`)
+still works and simply forwards to the packaged application.
+
+### Installation
+
+Clone the repository and install it with pip (optionally including the system
+tray extras):
+
+```bash
+pip install .
+# or include the tray extras
+pip install .[tray]
+```
+
+`pipx` users can install the package in an isolated virtual environment:
+
+```bash
+pipx install .
+# or include tray support
+pipx install '.[tray]'
+```
+
+Once installed the notifier is available as the `vrchat-join-notifier` command.
 
 ### Requirements
 
@@ -51,25 +73,14 @@ A native Linux port with a Tk GUI is provided in
 - `notify-send` (from `libnotify-bin`) for desktop notifications. When it is
   missing the script falls back to logging the messages.
 - `pgrep` (usually part of `procps`) is used to detect a running VRChat.exe.
-- *(Optional but recommended)* [`pystray`](https://pypi.org/project/pystray/) and
-  [`Pillow`](https://pypi.org/project/Pillow/) enable the task tray icon with
-  quick actions. Install them via `pip install pystray Pillow`.
+- *(Optional but recommended)* install the tray extras via
+  `pip install .[tray]` (or `pipx install '.[tray]'`) to enable the task tray
+  icon with quick actions.
 
 ### Running
 
 ```bash
-# git clone source files
-git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-```
-
-```bash
-# move directory
-cd vrchat-join-notification-with-pushover
-```
-
-```bash
-# compile run files
-python3 \src\vrchat-join-notification-with-pushover_linux.py
+vrchat-join-notifier
 ```
 
 On the first launch the settings window opens automatically. Configure:

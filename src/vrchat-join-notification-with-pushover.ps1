@@ -900,7 +900,7 @@ function Add-Startup{
       $sc.Arguments="-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcher`""
     }
     $sc.WorkingDirectory=Split-Path $launcher -Parent
-    $ico=Join-Path (Split-Path $launcher -Parent) 'notification.ico'
+    $ico=Join-Path (Split-Path $launcher -Parent) 'vrchat_join_notification\notification.ico'
     if(Test-Path $ico){ $sc.IconLocation=$ico }
     $sc.Save()
     Show-Notification $AppName 'Added to Startup.'
@@ -1062,7 +1062,7 @@ function Init-Tray{
   $ni.Visible=$true; $ni.Text=$AppName
 
   $launcherDir=Split-Path (Get-LauncherPath) -Parent
-  $icoPath=Join-Path $launcherDir 'notification.ico'
+  $icoPath=Join-Path $launcherDir 'vrchat_join_notification\notification.ico'
   if(Test-Path $icoPath){
     try{ $ni.Icon = New-Object System.Drawing.Icon($icoPath) } catch { $ni.Icon=[System.Drawing.SystemIcons]::Information }
   } else { $ni.Icon=[System.Drawing.SystemIcons]::Information }
@@ -1180,6 +1180,6 @@ Main
 # Build to EXE (Windows PowerShell)
 Install-Module ps2exe -Scope CurrentUser -Force
 Invoke-ps2exe -InputFile .\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
-  -Title 'VRChat Join Notifier' -IconFile .\notification.ico -NoConsole -STA -x64
+  -Title 'VRChat Join Notifier' -IconFile .\vrchat_join_notification\notification.ico -NoConsole -STA -x64
 #>
 
