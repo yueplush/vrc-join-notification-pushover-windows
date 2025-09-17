@@ -53,6 +53,8 @@ cd vrchat-join-notification-with-pushover
 
 > [!NOTE]
 > The rewritten Windows script uses the same parsing and session logic as the Linux edition, including Unicode-safe string handling. All non-ASCII characters (Japanese log phrases, dash variants, etc.) are emitted explicitly so Windows PowerShell 5.1 and `ps2exe` builds remain reliable on localized systems.
+>
+> If a previous build stopped at launch with a `The property 'Text' cannot be found` error, update to this release. The WinForms status table now registers its rows without leaking the intermediate index back to the caller, so StrictMode no longer halts the script.
 
 ---
 
