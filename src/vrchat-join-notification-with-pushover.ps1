@@ -805,13 +805,14 @@ function Send-PushoverNotification {
     if([string]::IsNullOrEmpty($token) -or [string]::IsNullOrEmpty($user)){ return }
     try {
         $payload = @{ token = $token; user = $user; title = $Title; message = $Message; priority = '0' }
-        [System.Threading.Tasks.Task]::Run({
-            Param($Body, $Uri)
+        $state = [pscustomobject]@{ Body = $payload; Uri = $POUrl }
+        $callback = [System.Action[object]]{
+            Param($state)
             try {
                 $client = New-Object System.Net.Http.HttpClient
                 try {
-                    $content = New-Object System.Net.Http.FormUrlEncodedContent($Body)
-                    $response = $client.PostAsync($Uri, $content).GetAwaiter().GetResult()
+                    $content = New-Object System.Net.Http.FormUrlEncodedContent($state.Body)
+                    $response = $client.PostAsync($state.Uri, $content).GetAwaiter().GetResult()
                     $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
                     try {
                         $json = $raw | ConvertFrom-Json -ErrorAction Stop
@@ -826,7 +827,8 @@ function Send-PushoverNotification {
             } catch {
                 Write-AppLog "Pushover failed: $($_.Exception.Message)"
             }
-        }, @($payload, $POUrl)) | Out-Null
+        }
+        [System.Threading.Tasks.Task]::Factory.StartNew($callback, $state) | Out-Null
     } catch {
         Write-AppLog "Failed to queue Pushover request: $($_.Exception.Message)"
     }
