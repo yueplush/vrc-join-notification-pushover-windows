@@ -9,6 +9,7 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 - Debounces duplicate events with configurable cooldowns.
 - Optional Pushover integration in addition to local desktop notifications.
 - Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing).
+- Linux build offers one-click login startup integration that writes/removes the `.desktop` autostart entry for you.
 
 ## Repository layout
 
@@ -157,13 +158,17 @@ The GUI opens automatically on the first launch. Configure the following:
 - **VRChat Log Folder:** Your Proton prefix path containing the VRChat logs. Common Steam installs are detected automatically, but you can browse to a custom directory if needed.
 - **Pushover User/Token:** Optional, required only if you want push notifications.
 
+Use the **Add to Startup** / **Remove from Startup** buttons if you want the app to manage your desktop login entry automatically.
+
 Click **Save & Restart Monitoring** to begin watching the log file. Settings persist in `config.json` within the chosen install folder. A pointer file (`config-location.txt`) keeps track of custom locations, so you can move the data directory without losing preferences.
 
 When the tray extras are installed **and** a tray manager is available, the notifier adds a tray icon with quick actions to open the settings window, start/stop monitoring, and exit. Closing the main window simply hides it, allowing the app to continue monitoring in the background. If the environment is missing tray support (no `pystray`/`Pillow` extras or no system tray manager), the app logs the reason, leaves the tray disabled, and you can continue operating it from the main window instead.
 
 ### 4. Start automatically on login (optional)
 
-Linux desktop environments follow the [freedesktop.org autostart specification](https://specifications.freedesktop.org/autostart-spec/latest/), so you can launch the notifier automatically by adding a `.desktop` entry to `~/.config/autostart/`. The basic steps are:
+The GUI's **Add to Startup** button creates the autostart entry under `~/.config/autostart/vrchat-join-notifier.desktop`, while **Remove from Startup** deletes it.
+
+If you prefer to manage it manually, Linux desktop environments follow the [freedesktop.org autostart specification](https://specifications.freedesktop.org/autostart-spec/latest/), so you can launch the notifier automatically by adding a `.desktop` entry to `~/.config/autostart/`. The basic steps are:
 
 ```bash
 mkdir -p ~/.config/autostart
