@@ -52,7 +52,7 @@ cd vrchat-join-notification-with-pushover
    The Windows tray tooltip now reflects the simplified app label **System Notification** while keeping all functionality unchanged.
 
 > [!NOTE]
-> The Windows script now builds its dash characters at runtime from explicit Unicode code points. This preserves the existing behavior while ensuring Windows PowerShell 5.1 parses the file correctly on Shift-JIS based systems.
+> The Windows script now rebuilds every non-ASCII symbol (dashes, Japanese log phrases, etc.) from explicit Unicode code points at runtime. This keeps localized log detection intact while ensuring Windows PowerShell 5.1 parses the file correctly on Shift-JIS based systems and during `ps2exe` builds.
 
 ---
 
