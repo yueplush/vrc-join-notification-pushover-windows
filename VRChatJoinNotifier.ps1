@@ -40,6 +40,7 @@ $script:SeenPlayers = @{}     # join key -> first seen time (per session)
 $script:SessionLastJoinAt = $null
 $script:SessionReady = $false # true once current session started
 $script:SessionSource = ''    # remember how the session started
+$script:PendingRoom = $null   # upcoming room/world info (if detected)
 $script:SessionStartedAt = $null
 
 # ---------------- Globals ----------------
@@ -76,6 +77,7 @@ function Reset-SessionState{
   $script:SeenPlayers = @{}
   $script:SessionStartedAt = $null
   $script:SessionLastJoinAt = $null
+  $script:PendingRoom = $null
 }
 function Ensure-SessionReady([string]$Reason){
   if($script:SessionReady){ return $false }
@@ -86,7 +88,27 @@ function Ensure-SessionReady([string]$Reason){
   $script:SeenPlayers = @{}
   $script:SessionStartedAt = Get-Date
   $script:SessionLastJoinAt = $null
-  Write-AppLog ("Session " + $script:SessionId + " started (" + $Reason + ").")
+  $roomDesc = $null
+  if($script:PendingRoom){
+    $pendingWorld = $script:PendingRoom.World
+    $pendingInstance = $script:PendingRoom.Instance
+    if(-not [string]::IsNullOrWhiteSpace($pendingWorld)){
+      $roomDesc = $pendingWorld
+      if(-not [string]::IsNullOrWhiteSpace($pendingInstance)){ $roomDesc += ":" + $pendingInstance }
+    }
+  }
+
+  $logMessage = "Session {0} started ({1})" -f $script:SessionId,$Reason
+  if($roomDesc){ $logMessage += " [" + $roomDesc + "]" }
+  $logMessage += "."
+  Write-AppLog $logMessage
+
+  if($global:TrayIcon){
+    $tip = $AppName
+    if($roomDesc){ $tip = $AppName + " — " + $roomDesc }
+    $global:IdleTooltip = $tip
+    try{ $global:TrayIcon.Text = $tip }catch{}
+  }
   return $true
 }
 
@@ -442,6 +464,50 @@ function Start-Follow{
         while(-not $sr.EndOfStream){
           $line=$sr.ReadLine()
 
+          if([string]::IsNullOrWhiteSpace($line)){ continue }
+
+          $lowerLine = $line.ToLowerInvariant()
+
+          if($lowerLine.Contains('onleftroom')){
+            $safeLine = $line -replace '\|\|','|'
+            Write-Output ("ROOM_EVENT||LEFT||||" + $safeLine)
+            continue
+          }
+
+          if($lowerLine.Contains('joining or creating room') -or $lowerLine.Contains('entering room')){
+            $worldId = ''
+            $instanceId = ''
+
+            $worldMatch = [regex]::Match($line,'wrld_[0-9a-f\-]+','IgnoreCase')
+            if($worldMatch.Success){
+              $worldId = $worldMatch.Value
+
+              $afterWorld = ''
+              try{
+                $afterWorld = $line.Substring($worldMatch.Index + $worldMatch.Length)
+              }catch{ $afterWorld = '' }
+
+              if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
+                $afterWorld = $afterWorld.TrimStart(':',' ','`t')
+                if(-not [string]::IsNullOrWhiteSpace($afterWorld)){
+                  $instMatch = [regex]::Match($afterWorld,'^[^\s]+')
+                  if($instMatch.Success){ $instanceId = $instMatch.Value }
+                }
+              }
+            }
+
+            if([string]::IsNullOrWhiteSpace($instanceId)){
+              $instAlt = [regex]::Match($line,'(?i)instance\s*[:=]\s*([^\s,]+)')
+              if($instAlt.Success){ $instanceId = $instAlt.Groups[1].Value }
+            }
+
+            $safeWorld = $worldId -replace '\|\|','|'
+            $safeInstance = $instanceId -replace '\|\|','|'
+            $safeLine = $line -replace '\|\|','|'
+            Write-Output ("ROOM_EVENT||ENTER||" + $safeWorld + "||" + $safeInstance + "||" + $safeLine)
+            continue
+          }
+
           if($reSelf.IsMatch($line)){
             Write-Output ("SELF_JOIN||" + $line)
             continue
@@ -480,6 +546,63 @@ function Process-FollowOutput {
         $p=$s.Substring(10)
         Write-AppLog ("Switching to newest log: " + $p)
         Reset-SessionState
+        if($global:TrayIcon){
+          $global:IdleTooltip = $AppName
+          try{ $global:TrayIcon.Text = $global:IdleTooltip }catch{}
+        }
+        continue
+      }
+
+      if($s.StartsWith('ROOM_EVENT||')){
+        $parts=$s.Split('||',5)
+        $eventType=''
+        if($parts.Length -ge 2){ $eventType = $parts[1] }
+        $worldId=''
+        if($parts.Length -ge 3){ $worldId = $parts[2] }
+        $instanceId=''
+        if($parts.Length -ge 4){ $instanceId = $parts[3] }
+        $rawRoomLine=''
+        if($parts.Length -ge 5){ $rawRoomLine = $parts[4] }
+
+        if($eventType -eq 'LEFT'){
+          if($script:SessionReady){
+            Write-AppLog ("Session " + $script:SessionId + " ended (OnLeftRoom detected).")
+          }else{
+            Write-AppLog 'OnLeftRoom detected.'
+          }
+          Reset-SessionState
+          if($global:TrayIcon){
+            $global:IdleTooltip = $AppName
+            try{ $global:TrayIcon.Text = $global:IdleTooltip }catch{}
+          }
+          continue
+        }
+
+        if($eventType -eq 'ENTER'){
+          Reset-SessionState
+          $roomInfo = [pscustomobject]@{ World=$worldId; Instance=$instanceId; Raw=$rawRoomLine }
+          $script:PendingRoom = $roomInfo
+          $roomDesc = $null
+          if(-not [string]::IsNullOrWhiteSpace($worldId)){
+            $roomDesc = $worldId
+            if(-not [string]::IsNullOrWhiteSpace($instanceId)){ $roomDesc += ":" + $instanceId }
+          }
+          if($roomDesc){
+            Write-AppLog ("Room transition detected: " + $roomDesc)
+          }elseif(-not [string]::IsNullOrWhiteSpace($rawRoomLine)){
+            Write-AppLog ("Room transition detected: " + $rawRoomLine)
+          }else{
+            Write-AppLog 'Room transition detected.'
+          }
+          if($global:TrayIcon){
+            $tip = $AppName
+            if($roomDesc){ $tip = $AppName + " — " + $roomDesc }
+            $global:IdleTooltip = $tip
+            try{ $global:TrayIcon.Text = $tip }catch{}
+          }
+          continue
+        }
+
         continue
       }
 
@@ -558,7 +681,9 @@ function Process-FollowOutput {
             if($detailParts.Count -gt 0){ $detail = ' (' + ($detailParts -join '; ') + ')' }
             Write-AppLog ("Session " + $script:SessionId + " fallback expired" + $detail + "; starting new session for OnJoinedRoom.")
           }
+          $pendingRoomInfo = $script:PendingRoom
           Reset-SessionState
+          if($pendingRoomInfo){ $script:PendingRoom = $pendingRoomInfo }
           [void](Ensure-SessionReady('OnJoinedRoom'))
         }
 
