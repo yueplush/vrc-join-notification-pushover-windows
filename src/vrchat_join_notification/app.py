@@ -10,6 +10,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -48,6 +49,7 @@ NOTIFY_COOLDOWN_SECONDS = 10
 SESSION_FALLBACK_GRACE_SECONDS = 30
 SESSION_FALLBACK_MAX_CONTINUATION_SECONDS = 4
 ICON_FILE_NAME = "notification.ico"
+AUTOSTART_FILE_NAME = "vrchat-join-notifier.desktop"
 
 
 def _expand_path(path: str) -> str:
@@ -1069,10 +1071,17 @@ class LogMonitor(threading.Thread):
 
 
 class AppController:
-    def __init__(self, root: tk.Tk, config: AppConfig, logger: AppLogger) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        config: AppConfig,
+        logger: AppLogger,
+        load_error: Optional[str] = None,
+    ) -> None:
         self.root = root
         self.config = config
         self.logger = logger
+        self._load_error = bool(load_error)
         self.notifier = DesktopNotifier(logger)
         self.pushover = PushoverClient(config, logger)
         self.session = SessionTracker(self.notifier, self.pushover, logger)
@@ -1096,8 +1105,11 @@ class AppController:
         self.root.after(200, self._process_events)
         self.apply_startup_state()
         self._update_tray_state()
+        self._maybe_hide_initially()
 
     def apply_startup_state(self) -> None:
+        if self._load_error:
+            return
         if self.config.first_run:
             self.status_var.set(
                 "Welcome! Configure the install folder, VRChat log folder, and optional "
@@ -1145,19 +1157,59 @@ class AppController:
 
         button_frame = ttk.Frame(main)
         button_frame.grid(row=3, column=0, columnspan=5, sticky=tk.EW, pady=(16, 0))
-        button_frame.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(1, weight=1)
-        button_frame.columnconfigure(2, weight=1)
+        for column in range(4):
+            button_frame.columnconfigure(column, weight=1)
 
-        ttk.Button(button_frame, text="Save & Restart Monitoring", command=self.save_and_restart).grid(
-            row=0, column=0, padx=4, sticky=tk.EW
+        self.save_restart_button = ttk.Button(
+            button_frame,
+            text="Save & Restart Monitoring",
+            command=self.save_and_restart,
         )
-        ttk.Button(button_frame, text="Start Monitoring", command=self.start_monitoring).grid(
-            row=0, column=1, padx=4, sticky=tk.EW
+        self.save_restart_button.grid(row=0, column=0, padx=4, sticky=tk.EW)
+
+        self.start_button = ttk.Button(
+            button_frame,
+            text="Start Monitoring",
+            command=self.start_monitoring,
         )
-        ttk.Button(button_frame, text="Stop Monitoring", command=self.stop_monitoring).grid(
-            row=0, column=2, padx=4, sticky=tk.EW
+        self.start_button.grid(row=0, column=1, padx=4, sticky=tk.EW)
+
+        self.stop_button = ttk.Button(
+            button_frame,
+            text="Stop Monitoring",
+            command=self.stop_monitoring,
         )
+        self.stop_button.grid(row=0, column=2, padx=4, sticky=tk.EW)
+
+        self.add_startup_button = ttk.Button(
+            button_frame,
+            text="Add to Startup",
+            command=self.add_to_startup,
+        )
+        self.add_startup_button.grid(row=1, column=0, padx=4, pady=(8, 0), sticky=tk.EW)
+
+        self.remove_startup_button = ttk.Button(
+            button_frame,
+            text="Remove from Startup",
+            command=self.remove_from_startup,
+        )
+        self.remove_startup_button.grid(row=1, column=1, padx=4, pady=(8, 0), sticky=tk.EW)
+
+        self.save_button = ttk.Button(
+            button_frame,
+            text="Save",
+            command=self.save_only,
+        )
+        self.save_button.grid(row=1, column=2, padx=4, pady=(8, 0), sticky=tk.EW)
+
+        self.quit_button = ttk.Button(
+            button_frame,
+            text="Quit",
+            command=self.request_quit,
+        )
+        self.quit_button.grid(row=1, column=3, padx=4, pady=(8, 0), sticky=tk.EW)
+
+        button_frame.grid_rowconfigure(1, weight=1)
 
         status_frame = ttk.Frame(main, padding=(0, 12, 0, 0))
         status_frame.grid(row=4, column=0, columnspan=5, sticky=tk.EW)
@@ -1183,6 +1235,7 @@ class AppController:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Unmap>", self._on_unmap)
+        self._update_startup_buttons()
 
     def _browse_install(self) -> None:
         directory = filedialog.askdirectory(initialdir=self.install_var.get() or os.getcwd())
@@ -1198,6 +1251,10 @@ class AppController:
         self._save_config()
         self.start_monitoring()
         self.status_var.set("Settings saved & monitoring restarted.")
+
+    def save_only(self) -> None:
+        self._save_config()
+        self.status_var.set("Settings saved.")
 
     def _save_config(self) -> None:
         self.config.install_dir = _expand_path(self.install_var.get())
@@ -1230,7 +1287,52 @@ class AppController:
             self.monitor = None
             self.logger.log("Monitoring stopped.")
         self.monitor_status_var.set("Stopped")
+        self.status_var.set("Monitoring stopped.")
         self._update_tray_state()
+
+    def add_to_startup(self) -> None:
+        entry_path = self._autostart_entry_path()
+        try:
+            command, workdir = self._launcher_command()
+            if not command:
+                raise RuntimeError("Unable to determine launch command.")
+            os.makedirs(os.path.dirname(entry_path), exist_ok=True)
+            lines = [
+                "[Desktop Entry]",
+                "Type=Application",
+                "Version=1.0",
+                f"Name={APP_NAME}",
+                "Comment=Monitor VRChat joins and send notifications.",
+                f"Exec={command}",
+                "Terminal=false",
+                "X-GNOME-Autostart-enabled=true",
+            ]
+            if workdir:
+                lines.append(f"Path={workdir}")
+            with open(entry_path, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines) + "\n")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Failed to add to startup:\n{exc}")
+            self.logger.log(f"Failed to add startup entry: {exc}")
+        else:
+            self.status_var.set("Added to startup.")
+            self.logger.log(f"Startup entry created at {entry_path}")
+        finally:
+            self._update_startup_buttons()
+
+    def remove_from_startup(self) -> None:
+        entry_path = self._autostart_entry_path()
+        try:
+            if os.path.exists(entry_path):
+                os.remove(entry_path)
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Failed to remove from startup:\n{exc}")
+            self.logger.log(f"Failed to remove startup entry: {exc}")
+        else:
+            self.status_var.set("Removed from startup.")
+            self.logger.log(f"Startup entry removed from {entry_path}")
+        finally:
+            self._update_startup_buttons()
 
     def _process_events(self) -> None:
         try:
@@ -1350,12 +1452,72 @@ class AppController:
         if hasattr(self, "tray") and self.tray is not None:
             self.tray.update_state(monitoring, tooltip)
 
+    def _maybe_hide_initially(self) -> None:
+        if self.config.first_run or self._load_error:
+            return
+        if not getattr(self, "tray", None) or not self.tray.available:
+            return
+        if len(sys.argv) > 1:
+            return
+        try:
+            if sys.stdin is not None and sys.stdin.isatty():
+                return
+        except Exception:
+            pass
+        self.root.after(400, self.hide_window)
+
+    def _autostart_entry_path(self) -> str:
+        config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        autostart_dir = _expand_path(os.path.join(config_home, "autostart"))
+        return os.path.join(autostart_dir, AUTOSTART_FILE_NAME)
+
+    def _launcher_command(self) -> Tuple[str, Optional[str]]:
+        args: list[str]
+        workdir: Optional[str]
+        if getattr(sys, "frozen", False):
+            exe_path = os.path.abspath(sys.executable)
+            args = [exe_path, *sys.argv[1:]]
+            workdir = os.path.dirname(exe_path)
+        else:
+            script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+            python_exe = sys.executable or "python3"
+            if script and script.lower().endswith(('.py', '.pyw')) and os.path.isfile(script):
+                args = [python_exe, script, *sys.argv[1:]]
+                workdir = os.path.dirname(script)
+            elif script:
+                args = [script, *sys.argv[1:]]
+                workdir = os.path.dirname(script)
+            else:
+                args = [python_exe, "-m", "vrchat_join_notification.app", *sys.argv[1:]]
+                workdir = None
+        command = " ".join(shlex.quote(arg) for arg in args if arg)
+        return command, workdir
+
+    def _autostart_entry_exists(self) -> bool:
+        try:
+            return os.path.exists(self._autostart_entry_path())
+        except Exception:
+            return False
+
+    def _update_startup_buttons(self) -> None:
+        exists = self._autostart_entry_exists()
+        if hasattr(self, "add_startup_button"):
+            if exists:
+                self.add_startup_button.state(["disabled"])
+            else:
+                self.add_startup_button.state(["!disabled"])
+        if hasattr(self, "remove_startup_button"):
+            if exists:
+                self.remove_startup_button.state(["!disabled"])
+            else:
+                self.remove_startup_button.state(["disabled"])
+
 
 def main() -> None:
     config, load_error = AppConfig.load()
     logger = AppLogger(config)
     root = tk.Tk()
-    controller = AppController(root, config, logger)
+    controller = AppController(root, config, logger, load_error)
     if load_error:
         messagebox.showerror(APP_NAME, load_error)
         controller.status_var.set(load_error)
