@@ -31,7 +31,7 @@ git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
 
 ```powershell(depency)
 # move directory
-cd \src\
+cd /vrchat-join-notification-with-pushover/src/
 ```
 
 ```powershell
