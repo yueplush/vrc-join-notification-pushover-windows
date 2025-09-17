@@ -16,7 +16,7 @@ and (optionally) through Pushover.
 
 ## Windows (PowerShell)
 
-The original script lives in `VRChatJoinNotifier.ps1`.
+The original script lives in `vrchat-join-notification-with-pushover.ps1`.
 
 ```powershell
 # Convert to an EXE (requires ps2exe)
@@ -31,7 +31,7 @@ start monitoring.
 ## Linux (Python)
 
 A native Linux port with a Tk GUI is provided in
-`VRChatJoinNotifier_linux.py`.
+`vrchat-join-notification-with-pushover_linux.py`.
 
 ### Requirements
 
@@ -43,20 +43,20 @@ A native Linux port with a Tk GUI is provided in
 ### Running
 
 ```bash
-python3 VRChatJoinNotifier_linux.py
+python3 vrchat-join-notification-with-pushover_linux.py
 ```
 
 On the first launch the settings window opens automatically. Configure:
 
 - **Install Folder (logs/cache):** Where the notifier stores its own log and
-  configuration file (`~/.local/share/VRChatJoinNotifier` by default).
+  configuration file (`~/.local/share/vrchat-join-notification-with-pushover` by default).
 - **VRChat Log Folder:** The Proton prefix that contains the VRChat logs. The
   script tries the typical Steam locations automatically.
 - **Pushover keys:** Optional, but required for push notifications.
 
 Click **Save & Restart Monitoring** once the folders and keys are set. The
 application remembers the settings in
-`~/.local/share/VRChatJoinNotifier/config.json` (a pointer file keeps track of
+`~/.local/share/vrchat-join-notification-with-pushover/config.json` (a pointer file keeps track of
 custom install folders).
 
 Desktop notifications mirror the Windows behaviour and Pushover pushes share
