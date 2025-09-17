@@ -1230,12 +1230,12 @@ class AppController:
 
     def _build_ui(self) -> None:
         self.root.title(f"{APP_NAME} (Linux)")
-        self.root.geometry("720x300")
         main = ttk.Frame(self.root, padding=12)
         main.pack(fill=tk.BOTH, expand=True)
 
         main.columnconfigure(1, weight=1)
         main.columnconfigure(3, weight=1)
+        main.rowconfigure(4, weight=1)
 
         ttk.Label(main, text="Install Folder (logs/cache):").grid(row=0, column=0, sticky=tk.W)
         install_entry = ttk.Entry(main, textvariable=self.install_var)
@@ -1312,7 +1312,7 @@ class AppController:
         button_frame.grid_rowconfigure(1, weight=1)
 
         status_frame = ttk.Frame(main, padding=(0, 12, 0, 0))
-        status_frame.grid(row=4, column=0, columnspan=5, sticky=tk.EW)
+        status_frame.grid(row=4, column=0, columnspan=5, sticky=tk.NSEW)
         status_frame.columnconfigure(1, weight=1)
 
         ttk.Label(status_frame, text="Monitor:").grid(row=0, column=0, sticky=tk.W)
@@ -1325,17 +1325,37 @@ class AppController:
         ttk.Label(status_frame, textvariable=self.session_var).grid(row=2, column=1, sticky=tk.W, pady=(4, 0))
 
         ttk.Label(status_frame, text="Last event:").grid(row=3, column=0, sticky=tk.W, pady=(4, 0))
-        last_event_label = ttk.Label(status_frame, textvariable=self.last_event_var, wraplength=560)
+        last_event_label = ttk.Label(status_frame, textvariable=self.last_event_var)
         last_event_label.grid(row=3, column=1, sticky=tk.W, pady=(4, 0))
 
         ttk.Label(status_frame, text="Status:").grid(row=4, column=0, sticky=tk.W, pady=(4, 0))
-        ttk.Label(status_frame, textvariable=self.status_var, wraplength=560).grid(
-            row=4, column=1, sticky=tk.W, pady=(4, 0)
-        )
+        status_value_label = ttk.Label(status_frame, textvariable=self.status_var)
+        status_value_label.grid(row=4, column=1, sticky=tk.W, pady=(4, 0))
+
+        def _sync_wrap_lengths(_: Optional[tk.Event] = None) -> None:
+            try:
+                rows = status_frame.grid_size()[1]
+                if rows <= 0:
+                    return
+                _, _, col_width, _ = status_frame.grid_bbox(1, 0, 1, rows - 1)
+            except tk.TclError:
+                return
+            wrap = max(col_width - 16, 160)
+            for widget in (last_event_label, status_value_label):
+                widget.configure(wraplength=wrap)
+
+        status_frame.bind("<Configure>", _sync_wrap_lengths)
+        _sync_wrap_lengths(None)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Unmap>", self._on_unmap)
         self._update_startup_buttons()
+
+        self.root.update_idletasks()
+        required_width = max(720, self.root.winfo_reqwidth())
+        required_height = self.root.winfo_reqheight()
+        self.root.minsize(required_width, required_height)
+        self.root.geometry(f"{required_width}x{required_height}")
 
     def _browse_install(self) -> None:
         directory = filedialog.askdirectory(initialdir=self.install_var.get() or os.getcwd())
