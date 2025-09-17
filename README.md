@@ -125,6 +125,26 @@ Click **Save & Restart Monitoring** to begin watching the log file. Settings per
 
 When the tray extras are installed, the notifier adds a tray icon with quick actions to open the settings window, start/stop monitoring, and exit. Closing the main window simply hides it, allowing the app to continue monitoring in the background.
 
+### 4. Start automatically on login (optional)
+
+Linux desktop environments follow the [freedesktop.org autostart specification](https://specifications.freedesktop.org/autostart-spec/latest/), so you can launch the notifier automatically by adding a `.desktop` entry to `~/.config/autostart/`. The basic steps are:
+
+```bash
+mkdir -p ~/.config/autostart
+cat > ~/.config/autostart/vrchat-join-notifier.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=VRChat Join Notifier
+Comment=Watch VRChat logs and notify when friends join.
+Exec=vrchat-join-notifier
+Terminal=false
+EOF
+```
+
+The `Exec` line assumes `vrchat-join-notifier` is on your `$PATH` (which is the case for installs performed with `pipx` or `pip install --user`). If you installed it into a virtual environment, point `Exec` to that environment's binary, for example `Exec=/home/you/vrchat-join-notification-with-pushover/.venv/bin/vrchat-join-notifier`.
+
+After saving the file, log out and back in (or reboot) and your session will automatically start the notifier. You can remove the autostart entry at any time by deleting the `.desktop` file.
+
 ### Uninstalling on Linux
 
 Remove the Python package with the same tool you used to install it:
