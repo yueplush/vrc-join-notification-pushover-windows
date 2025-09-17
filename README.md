@@ -186,6 +186,22 @@ Remove the Python package with the same tool you used to install it:
   pipx uninstall vrchat-join-notification-with-pushover
   ```
 
+If you are unsure which tool currently owns the installation, run the
+following shell snippet to check both managers and report what it finds:
+
+```bash
+if command -v pipx >/dev/null 2>&1 \
+   && pipx list --short | grep -qx 'vrchat-join-notification-with-pushover'; then
+  echo 'Installed via pipx'
+elif python3 -m pip show vrchat-join-notification-with-pushover >/dev/null 2>&1; then
+  echo 'Installed via pip / pip install --user'
+else
+  echo 'Package not found in pip or pipx environments'
+fi
+```
+
+Once you know the owning tool, run the corresponding uninstall command above.
+
 After uninstalling, you can delete the app's data directory (defaults to `~/.local/share/vrchat-join-notification-with-pushover`) if you no longer need your saved settings or cached logs.
 
 ### Desktop & push notifications
