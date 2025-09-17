@@ -8,7 +8,7 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 - Emits a single notification when you enter a new world (`OnJoinedRoom`) and once per unique player join (`OnPlayerJoined`).
 - Debounces duplicate events with configurable cooldowns.
 - Optional Pushover integration in addition to local desktop notifications.
-- Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + optional system tray).
+- Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing).
 
 ## Repository layout
 
@@ -65,6 +65,9 @@ Ensure the following are available on your system:
 | `libnotify` (`notify-send`) | Provides desktop notifications. Package name examples: `libnotify-bin` (Debian/Ubuntu), `libnotify` (Fedora/Arch). |
 | `procps` (`pgrep`) | Detects a running `VRChat.exe`. |
 | *(Optional)* `pystray`, `Pillow` | Enables the system tray icon. These are installed automatically when using the `[tray]` extra. |
+
+> [!NOTE]
+> The tray icon also requires a running desktop tray manager (for example an X11 Status Notifier host). If none is detected the notifier will disable the tray integration at runtime and fall back to the main window controls.
 
 Example package installs:
 
@@ -156,7 +159,7 @@ The GUI opens automatically on the first launch. Configure the following:
 
 Click **Save & Restart Monitoring** to begin watching the log file. Settings persist in `config.json` within the chosen install folder. A pointer file (`config-location.txt`) keeps track of custom locations, so you can move the data directory without losing preferences.
 
-When the tray extras are installed, the notifier adds a tray icon with quick actions to open the settings window, start/stop monitoring, and exit. Closing the main window simply hides it, allowing the app to continue monitoring in the background.
+When the tray extras are installed **and** a tray manager is available, the notifier adds a tray icon with quick actions to open the settings window, start/stop monitoring, and exit. Closing the main window simply hides it, allowing the app to continue monitoring in the background. If the environment is missing tray support (no `pystray`/`Pillow` extras or no system tray manager), the app logs the reason, leaves the tray disabled, and you can continue operating it from the main window instead.
 
 ### 4. Start automatically on login (optional)
 
