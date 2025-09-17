@@ -42,6 +42,7 @@ $script:SessionLastJoinAt = $null
 $script:SessionReady = $false # true once current session started
 $script:SessionSource = ''    # remember how the session started
 $script:PendingRoom = $null   # upcoming room/world info (if detected)
+$script:PendingSelfJoin = $null # pending self join metadata
 $script:SessionStartedAt = $null
 
 # ---------------- Globals ----------------
@@ -80,6 +81,7 @@ function Reset-SessionState{
   $script:SessionStartedAt = $null
   $script:SessionLastJoinAt = $null
   $script:PendingRoom = $null
+  $script:PendingSelfJoin = $null
 }
 function Ensure-SessionReady([string]$Reason){
   if($script:SessionReady){ return $false }
@@ -397,6 +399,16 @@ function Start-Follow{
       $after = $after.Trim()
       while($after.Length -gt 0 -and ':|-–—'.Contains($after[0])){ $after = $after.Substring(1).TrimStart() }
 
+      $placeholder = $null
+      if(-not [string]::IsNullOrWhiteSpace($after)){
+        $candidate = $after
+        $candidate = ([regex]::Split($candidate,'(?i)\b(displayName|name|userId)\b')[0])
+        $candidate = ($candidate.Split('(')[0]).Split('[')[0]
+        $candidate = ($candidate.Split('{')[0]).Split('<')[0]
+        $candidate = Normalize-JoinFragment $candidate
+        if(Is-PlaceholderName $candidate){ $placeholder = $candidate }
+      }
+
       $displayName = $null
       $m = [regex]::Match($after,'(?i)displayName\s*[:=]\s*(?<name>[^,\]\)]+)')
       if($m.Success){ $displayName = Normalize-JoinFragment $m.Groups['name'].Value }
@@ -430,7 +442,7 @@ function Start-Follow{
 
       if(-not $displayName -and $userId){ $displayName = $userId }
 
-      return [pscustomobject]@{ Name=$displayName; UserId=$userId }
+      return [pscustomobject]@{ Name=$displayName; UserId=$userId; Placeholder=$placeholder }
     }
 
     # Detects world/instance transitions for the local player even when VRChat logs
@@ -607,13 +619,16 @@ function Start-Follow{
             $parsed = Parse-PlayerEventLine $line 'OnPlayerJoined'
             $name = ''
             $userId = ''
+            $placeholder = ''
             if($parsed){
               if($parsed.Name){ $name = $parsed.Name }
               if($parsed.UserId){ $userId = $parsed.UserId }
+              if($parsed.Placeholder){ $placeholder = $parsed.Placeholder }
             }
             $safeName = ($name -replace '\|\|','|')
             $safeUser = ($userId -replace '\|\|','|')
-            Write-Output ("PLAYER_JOIN||" + $safeName + "||" + $safeUser + "||" + $line)
+            $safePlaceholder = ($placeholder -replace '\|\|','|')
+            Write-Output ("PLAYER_JOIN||" + $safeName + "||" + $safeUser + "||" + $safePlaceholder + "||" + $line)
             continue
           }
         }
@@ -699,6 +714,9 @@ function Process-FollowOutput {
       if(-not (Is-VRChatRunning)) { continue }
 
       if($s.StartsWith('SELF_JOIN||')){
+        $selfParts = $s.Split('||',2)
+        $rawSelfLine = ''
+        if($selfParts.Length -ge 2){ $rawSelfLine = $selfParts[1] }
         $now = Get-Date
         $reuseFallback = $false
         $elapsedSinceFallback = $null
@@ -777,7 +795,42 @@ function Process-FollowOutput {
           [void](Ensure-SessionReady('OnJoinedRoom'))
         }
 
-        Notify-All ("self:" + $script:SessionId) $AppName 'You joined an instance.'
+        $selfName = $null
+        $selfUserId = $null
+        $selfPlaceholder = $null
+        if(-not [string]::IsNullOrWhiteSpace($rawSelfLine)){
+          $parsedSelf = Parse-PlayerEventLine $rawSelfLine 'OnJoinedRoom'
+          if($parsedSelf){
+            if($parsedSelf.Name){ $selfName = Normalize-JoinName $parsedSelf.Name }
+            if($parsedSelf.UserId){
+              $selfUserId = $parsedSelf.UserId
+              $userKey = $selfUserId.ToLowerInvariant()
+              if(-not $script:LocalUserId -or $script:LocalUserId -ne $userKey){
+                $script:LocalUserId = $userKey
+                Write-AppLog ("Learned local userId from OnJoinedRoom event: " + $selfUserId)
+              }
+            }
+            if($parsedSelf.Placeholder){ $selfPlaceholder = Normalize-JoinName $parsedSelf.Placeholder }
+          }
+        }
+        if(-not $selfName -and $selfUserId){ $selfName = $selfUserId }
+        $displayName = if($selfName){ $selfName } else { 'You' }
+        $placeholderLabel = $selfPlaceholder
+        if([string]::IsNullOrWhiteSpace($placeholderLabel)){ $placeholderLabel = 'Player' }
+        elseif($placeholderLabel.ToLowerInvariant() -eq 'you'){ $placeholderLabel = 'Player' }
+        if($displayName.ToLowerInvariant() -eq 'you' -and $selfName){ $displayName = $selfName }
+        $messageName = $displayName
+        if(-not [string]::IsNullOrWhiteSpace($placeholderLabel)){
+          if([string]::IsNullOrWhiteSpace($messageName)){ $messageName = $placeholderLabel }
+          else{ $messageName = $messageName + '(' + $placeholderLabel + ')' }
+        }
+        $message = $messageName + ' joined your instance.'
+        Notify-All ("self:" + $script:SessionId) $AppName $message
+        $script:PendingSelfJoin = [pscustomobject]@{
+          SessionId = $script:SessionId
+          Placeholder = $placeholderLabel
+          Timestamp = $now
+        }
         continue
       }
 
@@ -850,19 +903,23 @@ function Process-FollowOutput {
       if($s.StartsWith('PLAYER_JOIN||')){
         if(-not $script:SessionReady){ [void](Ensure-SessionReady('OnPlayerJoined fallback')) }
         if(-not $script:SessionReady){ continue }
-        $parts=$s.Split('||',4)
+        $parts=$s.Split('||',5)
         $rawName = ''
         $rawUserId = ''
+        $rawPlaceholder = ''
         $rawLine = ''
         if($parts.Length -ge 2){ $rawName = $parts[1] }
-        if($parts.Length -ge 4){
-          $rawUserId = $parts[2]
+        if($parts.Length -ge 3){ $rawUserId = $parts[2] }
+        if($parts.Length -ge 5){
+          $rawPlaceholder = $parts[3]
+          $rawLine = $parts[4]
+        }elseif($parts.Length -ge 4){
           $rawLine = $parts[3]
-        }elseif($parts.Length -ge 3){
-          $rawLine = $parts[2]
         }
 
         $name = Normalize-JoinName $rawName
+        $originalName = $name
+        $placeholder = Normalize-JoinName $rawPlaceholder
 
         $userId = $null
         if(-not [string]::IsNullOrWhiteSpace($rawUserId)){
@@ -878,20 +935,48 @@ function Process-FollowOutput {
 
         if($userKey -and $script:LocalUserId -and $userKey -eq $script:LocalUserId){
           Write-AppLog ("Skipping join for known local userId '" + $userId + "'.")
+          $script:PendingSelfJoin = $null
           continue
         }
 
+        $pendingSelf = $script:PendingSelfJoin
+        if($pendingSelf -and $pendingSelf.SessionId -eq $script:SessionId){
+          $pendingPlaceholder = $pendingSelf.Placeholder
+          if($pendingPlaceholder){ $pendingPlaceholder = Normalize-JoinName $pendingPlaceholder }
+          $pendingLower = $null
+          if($pendingPlaceholder){ $pendingLower = $pendingPlaceholder.ToLowerInvariant() }
+          $eventPlaceholderLower = $null
+          if($placeholder){ $eventPlaceholderLower = $placeholder.ToLowerInvariant() }
+          elseif(Is-PlaceholderName $originalName){ $eventPlaceholderLower = $originalName.ToLowerInvariant() }
+          $ageOk = $false
+          if($pendingSelf.Timestamp){
+            try{ $ageOk = (($eventTime - $pendingSelf.Timestamp).TotalSeconds -lt 10) }
+            catch{ $ageOk = $false }
+          }
+          if($ageOk -and $pendingLower -and ($pendingLower -eq 'player' -or $pendingLower -eq 'you')){
+            if($pendingLower -eq $eventPlaceholderLower -or (-not $eventPlaceholderLower -and (Is-PlaceholderName $originalName))){
+              if($userKey -and -not $script:LocalUserId){ $script:LocalUserId = $userKey }
+              $script:PendingSelfJoin = $null
+              Write-AppLog 'Skipping join matched pending self event.'
+              continue
+            }
+          }
+        }
+
         $isPlaceholder = Is-PlaceholderName $name
+        $wasPlaceholder = $isPlaceholder
         $isFallbackSession = ($script:SessionSource -eq 'OnPlayerJoined fallback')
-        if($isPlaceholder -and $userKey){
+        if($wasPlaceholder -and $userKey){
           if($isFallbackSession -and -not $script:LocalUserId){
             $script:LocalUserId = $userKey
             Write-AppLog ("Learned local userId from join event: " + $userId)
             Write-AppLog ("Skipping initial local join placeholder for userId '" + $userId + "'.")
+            $script:PendingSelfJoin = $null
             continue
           }
           if($script:LocalUserId -and $script:LocalUserId -eq $userKey){
             Write-AppLog ("Skipping local join placeholder for userId '" + $userId + "'.")
+            $script:PendingSelfJoin = $null
             continue
           }
         }
@@ -917,7 +1002,16 @@ function Process-FollowOutput {
 
         if(-not $script:SeenPlayers.ContainsKey($joinKey)){
           $script:SeenPlayers[$joinKey]=$eventTime
-          $message = $name + ' joined your instance.'
+          $placeholderForMessage = $placeholder
+          if([string]::IsNullOrWhiteSpace($placeholderForMessage) -and $wasPlaceholder){
+            $placeholderForMessage = $originalName
+          }
+          if([string]::IsNullOrWhiteSpace($placeholderForMessage)){ $placeholderForMessage = 'Someone' }
+          elseif($placeholderForMessage.ToLowerInvariant() -eq 'you'){ $placeholderForMessage = 'Player' }
+          $messageName = $name
+          if([string]::IsNullOrWhiteSpace($messageName)){ $messageName = $placeholderForMessage }
+          else{ $messageName = $messageName + '(' + $placeholderForMessage + ')' }
+          $message = $messageName + ' joined your instance.'
           Notify-All $joinKey $AppName $message
 
           $logLine = "Session {0}: player joined '{1}'" -f $script:SessionId,$name
