@@ -530,10 +530,8 @@ class TrayIconController:
         if self.icon is not None:
             return
         if sys.platform.startswith("linux"):
-            display = os.environ.get("DISPLAY")
-            wayland = os.environ.get("WAYLAND_DISPLAY")
-            if not display and not wayland:
-                reason = "no graphical display detected (DISPLAY/WAYLAND_DISPLAY not set)."
+            reason = self._probe_linux_tray_support()
+            if reason:
                 self.available = False
                 self.disabled_reason = reason
                 self.logger.log(f"Tray icon disabled: {reason}")
@@ -638,6 +636,42 @@ class TrayIconController:
             overlay = Image.new("RGBA", image.size, (0, 0, 0, 110))
         image = Image.alpha_composite(image, overlay)
         return image
+
+    def _probe_linux_tray_support(self) -> Optional[str]:
+        if not pystray:
+            return "install 'pystray' and 'Pillow' to enable it."
+        display = os.environ.get("DISPLAY")
+        wayland_display = os.environ.get("WAYLAND_DISPLAY")
+        if not display and not wayland_display:
+            return "no graphical display detected (DISPLAY/WAYLAND_DISPLAY not set)."
+        backend_module = getattr(pystray.Icon, "__module__", "")
+        if backend_module.endswith("._xorg"):
+            if not display:
+                return "X11 system tray backend selected but DISPLAY is not set."
+            try:
+                from Xlib import X, display as xdisplay  # type: ignore[import-not-found]
+            except Exception as exc:  # pragma: no cover - optional dependency guard
+                return f"unable to access X11 libraries: {exc}"
+            try:
+                connection = xdisplay.Display(display)
+            except Exception as exc:
+                return f"failed to connect to X11 display '{display}': {exc}"
+            try:
+                screen_index = connection.get_default_screen()
+                atom_name = f"_NET_SYSTEM_TRAY_S{screen_index}"
+                selection_atom = connection.intern_atom(atom_name)
+                owner = connection.get_selection_owner(selection_atom)
+            except Exception as exc:
+                return f"failed to query X11 system tray availability: {exc}"
+            finally:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            owner_id = getattr(owner, "id", None)
+            if not owner_id or owner_id == getattr(X, "None", 0):
+                return "no system tray manager is running."
+        return None
 
     def _load_base_icon(self) -> Optional["Image.Image"]:
         if not self.available:
