@@ -11,6 +11,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -516,15 +517,27 @@ class TrayIconController:
         self._ready = threading.Event()
         self._active = False
         self._tooltip = APP_NAME
+        self.disabled_reason: Optional[str] = None
+        if not self.available:
+            self.disabled_reason = "install 'pystray' and 'Pillow' to enable it."
 
     def start(self) -> None:
         if not self.available:
-            self.logger.log(
-                "Tray icon disabled: install 'pystray' and 'Pillow' to enable it."
-            )
+            reason = self.disabled_reason or "install 'pystray' and 'Pillow' to enable it."
+            self.disabled_reason = reason
+            self.logger.log(f"Tray icon disabled: {reason}")
             return
         if self.icon is not None:
             return
+        if sys.platform.startswith("linux"):
+            display = os.environ.get("DISPLAY")
+            wayland = os.environ.get("WAYLAND_DISPLAY")
+            if not display and not wayland:
+                reason = "no graphical display detected (DISPLAY/WAYLAND_DISPLAY not set)."
+                self.available = False
+                self.disabled_reason = reason
+                self.logger.log(f"Tray icon disabled: {reason}")
+                return
         self._icon_idle = self._create_icon(False)
         self._icon_active = self._create_icon(True)
         menu = pystray.Menu(
@@ -543,7 +556,7 @@ class TrayIconController:
         self._thread.start()
 
     def stop(self) -> None:
-        if self.icon is not None:
+        if self.icon is not None and self._ready.is_set():
             try:
                 self.icon.stop()
             except Exception:
@@ -567,8 +580,15 @@ class TrayIconController:
         icon = self.icon
         try:
             icon.run(self._on_setup)
+        except Exception as exc:
+            error_text = str(exc).strip() or exc.__class__.__name__
+            reason = f"failed to initialise system tray ({error_text})."
+            self.available = False
+            self.disabled_reason = reason
+            self.logger.log(f"Tray icon disabled: {reason}")
         finally:
             self._on_teardown(icon)
+            self._thread = None
 
     def _on_setup(self, icon: "pystray.Icon") -> None:
         self._ready.set()
@@ -577,6 +597,8 @@ class TrayIconController:
 
     def _on_teardown(self, icon: "pystray.Icon") -> None:
         self._ready.clear()
+        if not self.available:
+            self.icon = None
 
     def _apply_state(self) -> None:
         if not self.available or self.icon is None or not self._ready.is_set():
@@ -1009,8 +1031,9 @@ class AppController:
                 "Save & Restart Monitoring when you're ready."
             )
         if not self.tray.available:
+            reason = self.tray.disabled_reason or "install 'pystray' and 'Pillow' to enable it."
             self.status_var.set(
-                f"{self.status_var.get()} Tray icon disabled: install 'pystray' and 'Pillow' to enable it."
+                f"{self.status_var.get()} Tray icon disabled: {reason}"
             )
 
     def _build_ui(self) -> None:
