@@ -57,9 +57,14 @@ A native Linux port with a Tk GUI is provided in
 
 ### Running
 
-```powershell(git clone)
+```bash
 # git clone source files
 git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+```
+
+```bash
+# move directory
+cd vrchat-join-notification-with-pushover
 ```
 
 ```bash
