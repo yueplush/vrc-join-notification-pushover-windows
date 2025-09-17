@@ -1,7 +1,6 @@
 # VRChat Join Notification with Pushover
 
-A cross-platform helper that watches your VRChat logs and notifies you when players enter your instance.  
-Windows users get a familiar PowerShell experience, while Linux users can install a native Python application that ships with a Tk GUI, desktop notifications, and optional Pushover pushes.
+A cross-platform helper that watches your VRChat logs and notifies you when players enter your instance. Windows users get a familiar PowerShell experience, while Linux users can install a native Python application that ships with a Tk GUI, desktop notifications, and optional Pushover pushes. Documentation is provided in English only.
 
 ## Features
 
@@ -21,14 +20,17 @@ Windows users get a familiar PowerShell experience, while Linux users can instal
 
 ---
 
-## basic action (Powershell/bash)
-A. Clone the repository:
-   ```powershell/bash
-   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   cd vrchat-join-notification-with-pushover
-   ```
+## Getting the source (PowerShell/Bash)
+
+Clone the repository and enter it:
+
+```powershell/bash
+git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+cd vrchat-join-notification-with-pushover
+```
 
 ## Windows quick start (PowerShell)
+
 1. Install the `ps2exe` module if you plan to build a standalone executable:
    ```powershell
    Install-Module -Name ps2exe -Scope CurrentUser
@@ -130,6 +132,40 @@ When the tray extras are installed, the notifier adds a tray icon with quick act
 
 ---
 
+## Building on Linux
+
+The project uses `setuptools` and `wheel` under the hood, driven by the `python3 -m build` frontend. Building locally lets you create both a source distribution (`sdist`) and a universal wheel that installs the `vrchat-join-notifier` console script.
+
+1. **Prepare build dependencies.** Ensure Python, Tk bindings, and compiler prerequisites are installed as described in the quick start above. Then install the build tooling (isolated in a virtual environment if you prefer):
+   ```bash
+   python3 -m pip install --upgrade pip
+   python3 -m pip install --upgrade build setuptools wheel
+   ```
+2. **Run the build.** From the repository root, invoke:
+   ```bash
+   python3 -m build
+   ```
+   This creates fresh artifacts under `dist/`.
+3. **Verify the artifacts.** Inspect the directory to confirm both the wheel and source archive exist and match the project version:
+   ```bash
+   ls -1 dist/
+   # vrchat-join-notification-with-pushover-<version>.tar.gz
+   # vrchat-join-notification-with-pushover-<version>-py3-none-any.whl
+   ```
+4. **Test the wheel locally (optional but recommended).** Install it into a virtual environment or with `--user` to ensure the console script is produced correctly:
+   ```bash
+   python3 -m venv .venv-test
+   source .venv-test/bin/activate
+   pip install dist/vrchat-join-notification-with-pushover-<version>-py3-none-any.whl
+   vrchat-join-notifier --help
+   deactivate
+   ```
+5. **Package for distribution (optional).** Share the artifacts by copying the `dist/` contents to your release location or another machine. Consumers can install directly with `pip install dist/vrchat-join-notification-with-pushover-<version>-py3-none-any.whl` or `pip install dist/vrchat-join-notification-with-pushover-<version>.tar.gz`. To include tray support, add `.[tray]` when installing from the source tree or install `pystray`/`Pillow` alongside the wheel.
+
+After installation, launch the notifier using `vrchat-join-notifier` as described in the quick-start section.
+
+---
+
 ## Development notes
 
 - The Python package metadata lives in `pyproject.toml`.
@@ -140,5 +176,5 @@ When the tray extras are installed, the notifier adds a tray icon with quick act
 
 ## Support
 
-If this project helps you, consider buying me a coffee (JPY):  
+If this project helps you, consider buying me a coffee (JPY):
 https://yueplushdev.booth.pm/items/7434788
