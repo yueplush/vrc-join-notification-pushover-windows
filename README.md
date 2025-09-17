@@ -68,6 +68,7 @@ cd vrchat-join-notification-with-pushover
 ```
 
 ```bash
+# compile run files
 python3 \src\vrchat-join-notification-with-pushover_linux.py
 ```
 
