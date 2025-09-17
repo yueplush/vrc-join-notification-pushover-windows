@@ -95,3 +95,4 @@ the same cooldown logic, so you will only see one alert per unique event.
 
 ## Buy Me Coffee
 I accept coffee fee, in this sites (JPY)
+https://yueplushdev.booth.pm/items/7434788
