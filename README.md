@@ -17,10 +17,21 @@ and (optionally) through Pushover.
 ## Windows (PowerShell)
 
 The original script lives in `vrchat-join-notification-with-pushover.ps1`.
+so lets starting!
 
 ```powershell(depency)
 # install depency module
 Install-Module -Name ps2exe -Scope CurrentUser
+```
+
+```powershell(git clone)
+# git clone source files
+git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+```
+
+```powershell(depency)
+# move directory
+cd \src\
 ```
 
 ```powershell
