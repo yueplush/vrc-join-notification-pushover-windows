@@ -373,13 +373,19 @@ function Start-Follow{
       if($tmp -match '^[\-:|–—]+$'){ return $null }
       return $tmp
     }
-    function Parse-JoinLine([string]$line){
+    function Parse-PlayerEventLine([string]$line,[string]$eventToken = 'OnPlayerJoined'){
       if([string]::IsNullOrWhiteSpace($line)){ return $null }
 
-      $idx = $line.ToLowerInvariant().IndexOf('onplayerjoined')
+      $needle = 'onplayerjoined'
+      if(-not [string]::IsNullOrWhiteSpace($eventToken)){
+        $needle = $eventToken.ToLowerInvariant()
+      }
+
+      $lowerLineForSearch = $line.ToLowerInvariant()
+      $idx = $lowerLineForSearch.IndexOf($needle)
       if($idx -lt 0){ return $null }
 
-      $after = $line.Substring($idx + 'onplayerjoined'.Length)
+      $after = $line.Substring($idx + $needle.Length)
       $after = [regex]::Replace($after,'[\u200B-\u200D\uFEFF]','')
       $after = $after.Trim()
       while($after.Length -gt 0 -and ':|-–—'.Contains($after[0])){ $after = $after.Substring(1).TrimStart() }
@@ -512,6 +518,7 @@ function Start-Follow{
 
     $reSelf = [regex]'(?i)\[Behaviour\].*OnJoinedRoom\b'
     $reJoin = [regex]'(?i)\[Behaviour\].*OnPlayerJoined\b'
+    $reLeave = [regex]'(?i)\[Behaviour\].*OnPlayerLeft\b'
 
     $logPath = Normalize-LogPath $InitialLogPath
     $lastSize = 0L
@@ -576,8 +583,23 @@ function Start-Follow{
             Write-Output ("SELF_JOIN||" + $line)
             continue
           }
+          if($reLeave.IsMatch($line)){
+            $parsedLeave = Parse-PlayerEventLine $line 'OnPlayerLeft'
+            $leaveName = 'Someone'
+            $leaveUserId = ''
+            if($parsedLeave){
+              if($parsedLeave.Name){ $leaveName = $parsedLeave.Name }
+              if($parsedLeave.UserId){ $leaveUserId = $parsedLeave.UserId }
+            }
+            if([string]::IsNullOrWhiteSpace($leaveName)){ $leaveName='Someone' }
+            $safeLeaveName = ($leaveName -replace '\|\|','|')
+            $safeLeaveUser = ($leaveUserId -replace '\|\|','|')
+            Write-Output ("PLAYER_LEAVE||" + $safeLeaveName + "||" + $safeLeaveUser + "||" + $line)
+            continue
+          }
+
           if($reJoin.IsMatch($line)){
-            $parsed = Parse-JoinLine $line
+            $parsed = Parse-PlayerEventLine $line 'OnPlayerJoined'
             $name = 'Someone'
             $userId = ''
             if($parsed){
@@ -752,6 +774,59 @@ function Process-FollowOutput {
         }
 
         Notify-All ("self:" + $script:SessionId) $AppName 'You joined an instance.'
+        continue
+      }
+
+      if($s.StartsWith('PLAYER_LEAVE||')){
+        if(-not $script:SessionReady){ continue }
+        $parts=$s.Split('||',4)
+        $rawName = ''
+        $rawUserId = ''
+        $rawLine = ''
+        if($parts.Length -ge 2){ $rawName = $parts[1] }
+        if($parts.Length -ge 4){
+          $rawUserId = $parts[2]
+          $rawLine = $parts[3]
+        }elseif($parts.Length -ge 3){
+          $rawLine = $parts[2]
+        }
+
+        $name = Normalize-JoinName $rawName
+        if(-not $name){ $name = 'Someone' }
+
+        $userId = $null
+        if(-not [string]::IsNullOrWhiteSpace($rawUserId)){
+          $tmpUser = [regex]::Replace($rawUserId,'[\u200B-\u200D\uFEFF]','').Trim()
+          if(-not [string]::IsNullOrWhiteSpace($tmpUser)){ $userId = $tmpUser }
+        }
+
+        $removedCount = 0
+        if($userId){
+          $keyPrefix = "join:{0}:{1}" -f $script:SessionId,$userId.ToLowerInvariant()
+          $keysToRemove = @()
+          foreach($existingKey in @($script:SeenPlayers.Keys)){
+            if($existingKey.StartsWith($keyPrefix)){
+              $keysToRemove += $existingKey
+            }
+          }
+          foreach($keyToRemove in $keysToRemove){
+            if($script:SeenPlayers.ContainsKey($keyToRemove)){
+              $null = $script:SeenPlayers.Remove($keyToRemove)
+              $removedCount++
+            }
+          }
+        }
+
+        $logLine = "Session {0}: player left '{1}'" -f $script:SessionId,$name
+        if($userId){ $logLine += " (" + $userId + ")" }
+        if($removedCount -gt 0){
+          $logLine += ' [cleared join tracking]'
+        }
+        $logLine += '.'
+        Write-AppLog $logLine
+        if($name -eq 'Someone' -and -not [string]::IsNullOrWhiteSpace($rawLine)){
+          Write-AppLog ("Leave parse fallback for line: " + $rawLine)
+        }
         continue
       }
 
