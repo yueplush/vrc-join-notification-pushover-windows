@@ -84,16 +84,26 @@ Example package installs:
 
 ### 2. Install the package
 
-Clone this repository and install it with `pip` (optionally enabling tray support):
+Clone this repository (if you have not already) and install it with `pip` (optionally enabling tray support):
 
 ```bash
+git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
 cd vrchat-join-notification-with-pushover
 python3 -m pip install --user .
 # or include the system tray extras
 python3 -m pip install --user '.[tray]'
 ```
 
-Using a virtual environment is also supported:
+> [!IMPORTANT]
+> Some distributions (such as Arch and Manjaro) mark Python as an
+> [externally managed environment](https://peps.python.org/pep-0668/).
+> On those systems the `--user` installs above will fail with
+> `error: externally-managed-environment`. Use a virtual environment or
+> `pipx` instead, or pass `--break-system-packages` if you understand
+> the risks of overriding your system Python packages.
+
+Using a virtual environment is also supported and avoids the
+externally-managed-environment restriction:
 
 ```bash
 python3 -m venv .venv
