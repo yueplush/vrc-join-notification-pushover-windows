@@ -933,11 +933,12 @@ function Process-FollowOutput {
 
 # ---------------- Startup shortcut ----------------
 function Get-StartupFolder{ [Environment]::GetFolderPath('Startup') }
+function Get-StartupShortcutPath{ Join-Path (Get-StartupFolder) 'VRChatJoinNotifier.lnk' }
 function Add-Startup{
   try{
     $startup=Get-StartupFolder; Ensure-Dir $startup
     $launcher=Get-LauncherPath
-    $lnk=Join-Path $startup 'VRChatJoinNotifier.lnk'
+    $lnk=Get-StartupShortcutPath
     $wsh=New-Object -ComObject WScript.Shell
     $sc=$wsh.CreateShortcut($lnk)
     if($launcher.ToLower().EndsWith('.exe')){ $sc.TargetPath=$launcher; $sc.Arguments='' }
@@ -950,14 +951,33 @@ function Add-Startup{
     if(Test-Path $ico){ $sc.IconLocation=$ico }
     $sc.Save()
     Show-Notification $AppName 'Added to Startup.'
-  }catch{ Show-Notification $AppName ("Failed to add Startup: " + $_.Exception.Message) }
+    return $true
+  }catch{
+    Show-Notification $AppName ("Failed to add Startup: " + $_.Exception.Message)
+    return $false
+  }
 }
 function Remove-Startup{
   try{
-    $lnk=Join-Path (Get-StartupFolder) 'VRChatJoinNotifier.lnk'
+    $lnk=Get-StartupShortcutPath
     if(Test-Path $lnk){ Remove-Item $lnk -Force }
     Show-Notification $AppName 'Removed from Startup.'
-  }catch{ Show-Notification $AppName ("Failed to remove Startup: " + $_.Exception.Message) }
+    return $true
+  }catch{
+    Show-Notification $AppName ("Failed to remove Startup: " + $_.Exception.Message)
+    return $false
+  }
+}
+
+function Exit-App{
+  Stop-Follow
+  try{ if($global:PulseTimer){ $global:PulseTimer.Stop(); $global:PulseTimer.Dispose(); $global:PulseTimer=$null } }catch{}
+  try{ if($global:TrayIcon){ $global:TrayIcon.Visible=$false; $global:TrayIcon.Dispose(); $global:TrayIcon=$null } }catch{}
+  try{ if($global:HostForm){ $global:HostForm.Close(); $global:HostForm.Dispose(); $global:HostForm=$null } }catch{}
+  try{ if($global:SettingsForm -and (-not $global:SettingsForm.IsDisposed)){ $global:SettingsForm.Close() } }catch{}
+  try{ if($script:Mutex){ $script:Mutex.ReleaseMutex() | Out-Null } }catch{}
+  [System.Windows.Forms.Application]::Exit()
+  [Environment]::Exit(0)
 }
 
 # ---------------- Settings GUI (single instance) ----------------
@@ -975,9 +995,10 @@ function Show-SettingsForm{
   }
 
   $form=New-Object System.Windows.Forms.Form
-  $form.Text='VRChat Join Notification with Pushover - Setting'
-  $form.Size=New-Object System.Drawing.Size(700,260)
+  $form.Text='VRChat Join Notifier (Windows)'
+  $form.Size=New-Object System.Drawing.Size(760,320)
   $form.StartPosition='CenterScreen'
+  $form.MinimumSize=$form.Size
 
   $lblInstall=New-Object System.Windows.Forms.Label
   $lblInstall.Text='Install Folder (logs/cache):'
@@ -986,13 +1007,13 @@ function Show-SettingsForm{
 
   $txtInstall=New-Object System.Windows.Forms.TextBox
   $txtInstall.Location=New-Object System.Drawing.Point(12,32)
-  $txtInstall.Size=New-Object System.Drawing.Size(560,22)
+  $txtInstall.Size=New-Object System.Drawing.Size(600,24)
   $txtInstall.Text=$global:Cfg.InstallDir
 
   $btnBrowseInstall=New-Object System.Windows.Forms.Button
-  $btnBrowseInstall.Text='Browse...'
-  $btnBrowseInstall.Location=New-Object System.Drawing.Point(580,30)
-  $btnBrowseInstall.Size=New-Object System.Drawing.Size(90,24)
+  $btnBrowseInstall.Text='Browse…'
+  $btnBrowseInstall.Location=New-Object System.Drawing.Point(624,30)
+  $btnBrowseInstall.Size=New-Object System.Drawing.Size(110,28)
   $btnBrowseInstall.Add_Click({ param($sender,$e)
     $dlg=New-Object System.Windows.Forms.FolderBrowserDialog
     if($dlg.ShowDialog() -eq 'OK'){ $txtInstall.Text=$dlg.SelectedPath }
@@ -1000,18 +1021,18 @@ function Show-SettingsForm{
 
   $lblVR=New-Object System.Windows.Forms.Label
   $lblVR.Text='VRChat Log Folder:'
-  $lblVR.Location=New-Object System.Drawing.Point(12,60)
+  $lblVR.Location=New-Object System.Drawing.Point(12,72)
   $lblVR.AutoSize=$true
 
   $txtVR=New-Object System.Windows.Forms.TextBox
-  $txtVR.Location=New-Object System.Drawing.Point(12,80)
-  $txtVR.Size=New-Object System.Drawing.Size(560,22)
+  $txtVR.Location=New-Object System.Drawing.Point(12,92)
+  $txtVR.Size=New-Object System.Drawing.Size(600,24)
   $txtVR.Text=$global:Cfg.VRChatLogDir
 
   $btnBrowseVR=New-Object System.Windows.Forms.Button
-  $btnBrowseVR.Text='Browse...'
-  $btnBrowseVR.Location=New-Object System.Drawing.Point(580,78)
-  $btnBrowseVR.Size=New-Object System.Drawing.Size(90,24)
+  $btnBrowseVR.Text='Browse…'
+  $btnBrowseVR.Location=New-Object System.Drawing.Point(624,90)
+  $btnBrowseVR.Size=New-Object System.Drawing.Size(110,28)
   $btnBrowseVR.Add_Click({ param($sender,$e)
     $dlg=New-Object System.Windows.Forms.FolderBrowserDialog
     if($dlg.ShowDialog() -eq 'OK'){ $txtVR.Text=$dlg.SelectedPath }
@@ -1019,12 +1040,12 @@ function Show-SettingsForm{
 
   $lblUser=New-Object System.Windows.Forms.Label
   $lblUser.Text='Pushover User Key:'
-  $lblUser.Location=New-Object System.Drawing.Point(12,110)
+  $lblUser.Location=New-Object System.Drawing.Point(12,126)
   $lblUser.AutoSize=$true
 
   $txtUser=New-Object System.Windows.Forms.TextBox
-  $txtUser.Location=New-Object System.Drawing.Point(12,130)
-  $txtUser.Size=New-Object System.Drawing.Size(300,22)
+  $txtUser.Location=New-Object System.Drawing.Point(12,146)
+  $txtUser.Size=New-Object System.Drawing.Size(300,24)
   $txtUser.UseSystemPasswordChar=$true
   if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverUser)){
     $txtUser.Text=''
@@ -1034,12 +1055,12 @@ function Show-SettingsForm{
 
   $lblToken=New-Object System.Windows.Forms.Label
   $lblToken.Text='Pushover API Token:'
-  $lblToken.Location=New-Object System.Drawing.Point(340,110)
+  $lblToken.Location=New-Object System.Drawing.Point(324,126)
   $lblToken.AutoSize=$true
 
   $txtToken=New-Object System.Windows.Forms.TextBox
-  $txtToken.Location=New-Object System.Drawing.Point(340,130)
-  $txtToken.Size=New-Object System.Drawing.Size(330,22)
+  $txtToken.Location=New-Object System.Drawing.Point(324,146)
+  $txtToken.Size=New-Object System.Drawing.Size(410,24)
   $txtToken.UseSystemPasswordChar=$true
   if([string]::IsNullOrWhiteSpace($global:Cfg.PushoverToken)){
     $txtToken.Text=''
@@ -1047,44 +1068,91 @@ function Show-SettingsForm{
     $txtToken.Text='*****'
   }
 
-  $btnAddStartup=New-Object System.Windows.Forms.Button
-  $btnAddStartup.Text='Add to Startup'
-  $btnAddStartup.Location=New-Object System.Drawing.Point(12,170)
-  $btnAddStartup.Size=New-Object System.Drawing.Size(120,28)
-  $btnAddStartup.Add_Click({ param($sender,$e) Add-Startup })
-
-  $btnRemoveStartup=New-Object System.Windows.Forms.Button
-  $btnRemoveStartup.Text='Remove from Startup'
-  $btnRemoveStartup.Location=New-Object System.Drawing.Point(142,170)
-  $btnRemoveStartup.Size=New-Object System.Drawing.Size(160,28)
-  $btnRemoveStartup.Add_Click({ param($sender,$e) Remove-Startup })
-
-  $btnSave=New-Object System.Windows.Forms.Button
-  $btnSave.Text='Save'
-  $btnSave.Location=New-Object System.Drawing.Point(540,170)
-  $btnSave.Size=New-Object System.Drawing.Size(60,28)
-  $btnSave.Add_Click({ param($sender,$e)
+  $updateConfigFromForm = {
     $global:Cfg.InstallDir   = $txtInstall.Text
     $global:Cfg.VRChatLogDir = $txtVR.Text
     if($txtUser.Text -ne '*****'){  $global:Cfg.PushoverUser  = $txtUser.Text }
     if($txtToken.Text -ne '*****'){ $global:Cfg.PushoverToken = $txtToken.Text }
+  }
+
+  $btnSaveRestart=New-Object System.Windows.Forms.Button
+  $btnSaveRestart.Text='Save & Restart Monitoring'
+  $btnSaveRestart.Location=New-Object System.Drawing.Point(12,180)
+  $btnSaveRestart.Size=New-Object System.Drawing.Size(280,32)
+  $btnSaveRestart.Add_Click({
+    & $updateConfigFromForm
     Save-Config
     Start-Follow
     Show-Notification $AppName 'Settings saved & monitoring restarted.'
   })
 
-  $btnClose=New-Object System.Windows.Forms.Button
-  $btnClose.Text='Close'
-  $btnClose.Location=New-Object System.Drawing.Point(610,170)
-  $btnClose.Size=New-Object System.Drawing.Size(60,28)
-  $btnClose.Add_Click({ param($sender,$e) ($sender.FindForm()).Close() })
+  $btnStart=New-Object System.Windows.Forms.Button
+  $btnStart.Text='Start Monitoring'
+  $btnStart.Location=New-Object System.Drawing.Point(308,180)
+  $btnStart.Size=New-Object System.Drawing.Size(180,32)
+  $btnStart.Add_Click({
+    Start-Follow
+    Show-Notification $AppName 'Monitoring started.'
+  })
+
+  $btnStop=New-Object System.Windows.Forms.Button
+  $btnStop.Text='Stop Monitoring'
+  $btnStop.Location=New-Object System.Drawing.Point(500,180)
+  $btnStop.Size=New-Object System.Drawing.Size(180,32)
+  $btnStop.Add_Click({
+    Stop-Follow
+    Show-Notification $AppName 'Monitoring stopped.'
+  })
+
+  $btnAddStartup=New-Object System.Windows.Forms.Button
+  $btnAddStartup.Text='Add to Startup'
+  $btnAddStartup.Location=New-Object System.Drawing.Point(12,220)
+  $btnAddStartup.Size=New-Object System.Drawing.Size(200,32)
+
+  $btnRemoveStartup=New-Object System.Windows.Forms.Button
+  $btnRemoveStartup.Text='Remove from Startup'
+  $btnRemoveStartup.Location=New-Object System.Drawing.Point(220,220)
+  $btnRemoveStartup.Size=New-Object System.Drawing.Size(260,32)
+
+  $btnSave=New-Object System.Windows.Forms.Button
+  $btnSave.Text='Save'
+  $btnSave.Location=New-Object System.Drawing.Point(488,220)
+  $btnSave.Size=New-Object System.Drawing.Size(110,32)
+  $btnSave.Add_Click({
+    & $updateConfigFromForm
+    Save-Config
+    Show-Notification $AppName 'Settings saved.'
+  })
+
+  $btnQuit=New-Object System.Windows.Forms.Button
+  $btnQuit.Text='Quit'
+  $btnQuit.Location=New-Object System.Drawing.Point(624,220)
+  $btnQuit.Size=New-Object System.Drawing.Size(110,32)
+  $btnQuit.Add_Click({ Exit-App })
+
+  $updateStartupButtons = {
+    $exists = Test-Path (Get-StartupShortcutPath)
+    $btnAddStartup.Enabled = -not $exists
+    $btnRemoveStartup.Enabled = $exists
+  }
+
+  $btnAddStartup.Add_Click({
+    if(Add-Startup){ & $updateStartupButtons }
+  })
+
+  $btnRemoveStartup.Add_Click({
+    if(Remove-Startup){ & $updateStartupButtons }
+  })
 
   $form.Controls.AddRange(@(
     $lblInstall,$txtInstall,$btnBrowseInstall,
     $lblVR,$txtVR,$btnBrowseVR,
     $lblUser,$txtUser,$lblToken,$txtToken,
-    $btnAddStartup,$btnRemoveStartup,$btnSave,$btnClose
+    $btnSaveRestart,$btnStart,$btnStop,
+    $btnAddStartup,$btnRemoveStartup,$btnSave,$btnQuit
   ))
+
+  & $updateStartupButtons
 
   $form.Add_Shown({ param($sender,$e) $sender.Activate() })
   $form.Add_FormClosed({ param($sender,$e) $global:SettingsForm=$null })
@@ -1125,15 +1193,7 @@ function Init-Tray{
       Show-Notification $AppName 'Monitoring restarted.'
     }) | Out-Null
   [void]$menu.Items.Add('-')
-  $menu.Items.Add('Exit').Add_Click({ param($s,$e)
-      Stop-Follow
-      try{
-        if($global:TrayIcon){ $global:TrayIcon.Visible=$false; $global:TrayIcon.Dispose() }
-        if($global:HostForm){ $global:HostForm.Close(); $global:HostForm.Dispose() }
-        if($script:Mutex){ $script:Mutex.ReleaseMutex() | Out-Null }
-      }catch{}
-      [System.Windows.Forms.Application]::Exit(); [Environment]::Exit(0)
-    }) | Out-Null
+  $menu.Items.Add('Exit').Add_Click({ param($s,$e) Exit-App }) | Out-Null
 
   $ni.ContextMenuStrip=$menu
   $ni.add_MouseUp({ param($sender,$e)
