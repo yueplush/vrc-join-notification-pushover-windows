@@ -18,6 +18,11 @@ and (optionally) through Pushover.
 
 The original script lives in `vrchat-join-notification-with-pushover.ps1`.
 
+```powershell(depency)
+# install depency module
+Install-Module -Name ps2exe -Scope CurrentUser
+```
+
 ```powershell
 # Convert to an EXE (requires ps2exe)
 Invoke-ps2exe .\vrchat-join-notification-with-pushover.ps1 .\vrchat-join-notification-with-pushover.exe `
