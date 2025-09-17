@@ -9,7 +9,7 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 - Debounces duplicate events with configurable cooldowns.
 - Optional Pushover integration in addition to local desktop notifications.
 - Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing).
-- Linux build offers one-click login startup integration that writes/removes the `.desktop` autostart entry for you.
+- Linux build offers one-click login startup integration that writes/removes the `.desktop` autostart entry for you and confirms the action with a desktop notification.
 
 ## Repository layout
 
@@ -167,6 +167,8 @@ When the tray extras are installed **and** a tray manager is available, the noti
 ### 4. Start automatically on login (optional)
 
 The GUI's **Add to Startup** button creates the autostart entry under `~/.config/autostart/vrchat-join-notifier.desktop`, while **Remove from Startup** deletes it.
+
+Both buttons also trigger a desktop notification so you immediately know whether the action succeeded.
 
 If you prefer to manage it manually, Linux desktop environments follow the [freedesktop.org autostart specification](https://specifications.freedesktop.org/autostart-spec/latest/), so you can launch the notifier automatically by adding a `.desktop` entry to `~/.config/autostart/`. The basic steps are:
 

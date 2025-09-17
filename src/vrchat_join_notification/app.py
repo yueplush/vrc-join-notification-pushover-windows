@@ -1314,9 +1314,11 @@ class AppController:
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Failed to add to startup:\n{exc}")
             self.logger.log(f"Failed to add startup entry: {exc}")
+            self.notifier.send(APP_NAME, f"Failed to add to startup: {exc}")
         else:
             self.status_var.set("Added to startup.")
             self.logger.log(f"Startup entry created at {entry_path}")
+            self.notifier.send(APP_NAME, "Added to startup.")
         finally:
             self._update_startup_buttons()
 
@@ -1328,9 +1330,11 @@ class AppController:
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Failed to remove from startup:\n{exc}")
             self.logger.log(f"Failed to remove startup entry: {exc}")
+            self.notifier.send(APP_NAME, f"Failed to remove from startup: {exc}")
         else:
             self.status_var.set("Removed from startup.")
             self.logger.log(f"Startup entry removed from {entry_path}")
+            self.notifier.send(APP_NAME, "Removed from startup.")
         finally:
             self._update_startup_buttons()
 
