@@ -6,6 +6,7 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 
 - Monitors the most recent `output_log_*.txt` / `Player.log` and automatically follows log roll-overs.
 - Emits a single notification when you enter a new world (`OnJoinedRoom`) and once per unique player join (`OnPlayerJoined`), with each join toast including the placeholder label VRChat logged (for example `Player`) so you can tell when the game is still resolving a display name.
+- Silently ignores the redundant generic desktop toast (`A player joined your instance.`) so only the richer, name-aware notification remains on Windows and Linux.
 - Debounces duplicate events with configurable cooldowns.
 - Optional Pushover integration in addition to local desktop notifications.
 - Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing).
