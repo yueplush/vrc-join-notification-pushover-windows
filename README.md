@@ -1,109 +1,143 @@
 # VRChat Join Notification with Pushover
 
-This repository contains cross-platform helpers that watch your VRChat logs and
-notify you when players join your instance. Notifications are delivered locally
-and (optionally) through Pushover.
+A cross-platform helper that watches your VRChat logs and notifies you when players enter your instance.  
+Windows users get a familiar PowerShell experience, while Linux users can install a native Python application that ships with a Tk GUI, desktop notifications, and optional Pushover pushes.
 
 ## Features
 
-- Watches the most recent `output_log_*.txt` or `Player.log` file and switches
-  automatically when VRChat rolls over to a new log.
-- Sends a single notification when you enter an instance (`OnJoinedRoom`) and
-  one per unique player that joins you (`OnPlayerJoined`).
+- Monitors the most recent `output_log_*.txt` / `Player.log` and automatically follows log roll-overs.
+- Emits a single notification when you enter a new world (`OnJoinedRoom`) and once per unique player join (`OnPlayerJoined`).
 - Debounces duplicate events with configurable cooldowns.
-- Optional Pushover push notifications alongside local toasts.
-- Simple GUI on both Windows (PowerShell/WinForms) and Linux (Python/Tk) with tray controls.
+- Optional Pushover integration in addition to local desktop notifications.
+- Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + optional system tray).
 
-## Windows (PowerShell)
+## Repository layout
 
-The original script lives in `vrchat-join-notification-with-pushover.ps1`.
-so lets starting!
+| Path | Description |
+| --- | --- |
+| `src/vrchat-join-notification-with-pushover.ps1` | Original Windows PowerShell implementation. |
+| `src/vrchat-join-notification-with-pushover_linux.py` | Compatibility shim that launches the packaged Linux app. |
+| `src/vrchat_join_notification/` | Installable Python package that provides the Linux GUI and notifier logic. |
 
-```powershell(depency)
-# install depency module
-Install-Module -Name ps2exe -Scope CurrentUser
-```
+---
 
-```powershell(git clone)
-# git clone source files
-git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-```
+## Windows quick start (PowerShell)
 
-```powershell
-# Build to EXE (Windows PowerShell)
-Install-Module ps2exe -Scope CurrentUser -Force
-Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
-  -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
-```
+1. Install the `ps2exe` module if you plan to build a standalone executable:
+   ```powershell
+   Install-Module -Name ps2exe -Scope CurrentUser
+   ```
+2. Clone the repository:
+   ```powershell
+   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+   cd vrchat-join-notification-with-pushover
+   ```
+3. Run the script directly:
+   ```powershell
+   .\src\vrchat-join-notification-with-pushover.ps1
+   ```
+   or build an `.exe`:
+   ```powershell
+   Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
+     -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
+   ```
+4. Use the tray icon to open **Settings**, configure your VRChat log directory and (optionally) Pushover credentials, then start monitoring.
 
-Run the script (or compiled EXE) and use the tray icon to open the settings
-window, configure your VRChat log directory and Pushover credentials, then
-start monitoring.
+---
 
-## Linux (Python)
+## Linux quick start (Python package)
 
-A native Linux port with a Tk GUI now ships as an installable Python package.
-The legacy script entry point (`vrchat-join-notification-with-pushover_linux.py`)
-still works and simply forwards to the packaged application.
+The Linux port is published as an installable Python package that exposes the `vrchat-join-notifier` command. The legacy script `src/vrchat-join-notification-with-pushover_linux.py` simply calls into that package for backwards compatibility.
 
-### Installation
+### 1. Prerequisites
 
-Clone the repository and install it with pip (optionally including the system
-tray extras):
+Ensure the following are available on your system:
+
+| Requirement | Why it is needed |
+| --- | --- |
+| Python 3.8+ with Tk bindings | Powers the GUI. Usually provided by `python3` + `python3-tk`. |
+| `pip` or `pipx` | Installs the package. |
+| `libnotify` (`notify-send`) | Provides desktop notifications. Package name examples: `libnotify-bin` (Debian/Ubuntu), `libnotify` (Fedora/Arch). |
+| `procps` (`pgrep`) | Detects a running `VRChat.exe`. |
+| *(Optional)* `pystray`, `Pillow` | Enables the system tray icon. These are installed automatically when using the `[tray]` extra. |
+
+Example package installs:
+
+- **Debian/Ubuntu**
+  ```bash
+  sudo apt update
+  sudo apt install python3 python3-venv python3-tk python3-pip libnotify-bin procps
+  ```
+- **Fedora**
+  ```bash
+  sudo dnf install python3 python3-tkinter python3-pip libnotify procps-ng
+  ```
+- **Arch / Manjaro**
+  ```bash
+  sudo pacman -S python python-pip tk libnotify procps-ng
+  ```
+
+### 2. Install the package
+
+Clone this repository and install it with `pip` (optionally enabling tray support):
 
 ```bash
-pip install .
-# or include the tray extras
-pip install .[tray]
+cd vrchat-join-notification-with-pushover
+python3 -m pip install --user .
+# or include the system tray extras
+python3 -m pip install --user '.[tray]'
 ```
 
-`pipx` users can install the package in an isolated virtual environment:
+Using a virtual environment is also supported:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install '.[tray]'
+```
+
+If you prefer to keep the app isolated from your system Python, `pipx` works out of the box:
 
 ```bash
 pipx install .
-# or include tray support
+# or, for tray support
 pipx install '.[tray]'
 ```
 
-Once installed the notifier is available as the `vrchat-join-notifier` command.
+### 3. Launch the notifier
 
-### Requirements
-
-- Python 3 with Tk bindings (present on most distributions).
-- `notify-send` (from `libnotify-bin`) for desktop notifications. When it is
-  missing the script falls back to logging the messages.
-- `pgrep` (usually part of `procps`) is used to detect a running VRChat.exe.
-- *(Optional but recommended)* install the tray extras via
-  `pip install .[tray]` (or `pipx install '.[tray]'`) to enable the task tray
-  icon with quick actions.
-
-### Running
+Run the command that gets added to your `$PATH`:
 
 ```bash
 vrchat-join-notifier
 ```
 
-On the first launch the settings window opens automatically. Configure:
+The GUI opens automatically on the first launch. Configure the following:
 
-- **Install Folder (logs/cache):** Where the notifier stores its own log and
-  configuration file (`~/.local/share/vrchat-join-notification-with-pushover` by default).
-- **VRChat Log Folder:** The Proton prefix that contains the VRChat logs. The
-  script tries the typical Steam locations automatically.
-- **Pushover keys:** Optional, but required for push notifications.
+- **Install Folder (logs/cache):** Location where the app stores its config and log files (`~/.local/share/vrchat-join-notification-with-pushover` by default).
+- **VRChat Log Folder:** Your Proton prefix path containing the VRChat logs. Common Steam installs are detected automatically, but you can browse to a custom directory if needed.
+- **Pushover User/Token:** Optional, required only if you want push notifications.
 
-Click **Save & Restart Monitoring** once the folders and keys are set. The
-application remembers the settings in
-`~/.local/share/vrchat-join-notification-with-pushover/config.json` (a pointer file keeps track of
-custom install folders).
+Click **Save & Restart Monitoring** to begin watching the log file. Settings persist in `config.json` within the chosen install folder. A pointer file (`config-location.txt`) keeps track of custom locations, so you can move the data directory without losing preferences.
 
-When the optional tray dependencies are installed the app adds a task tray icon
-with menu actions to open the settings window, start/stop monitoring and quit.
-Closing the window simply hides it to the tray so monitoring can continue in
-the background.
+When the tray extras are installed, the notifier adds a tray icon with quick actions to open the settings window, start/stop monitoring, and exit. Closing the main window simply hides it, allowing the app to continue monitoring in the background.
 
-Desktop notifications mirror the Windows behaviour and Pushover pushes share
-the same cooldown logic, so you will only see one alert per unique event.
+### Desktop & push notifications
 
-## Buy Me Coffee
-I accept coffee fee, in this sites (JPY)
+- Linux desktop notifications mirror the Windows behaviour and obey the same cooldowns—one toast per unique event.
+- Pushover pushes use the same debounce logic to avoid duplicate alerts across devices.
+
+---
+
+## Development notes
+
+- The Python package metadata lives in `pyproject.toml`.
+- Packaging uses `setuptools`; run `python3 -m build` to produce wheels/sdist.
+- Linting/tests are not bundled; feel free to use your preferred tooling.
+
+---
+
+## Support
+
+If this project helps you, consider buying me a coffee (JPY):  
 https://yueplushdev.booth.pm/items/7434788
