@@ -983,7 +983,8 @@ function Get-SessionDescription {
 
 function Update-TrayState {
     $monitoring = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
-    $tooltip = "$AppName – " + ($monitoring ? 'Monitoring' : 'Stopped')
+    $statusText = if($monitoring){ 'Monitoring' } else { 'Stopped' }
+    $tooltip = "$AppName – $statusText"
     if($script:Session.Ready){
         $tooltip += "`n" + (Get-SessionDescription)
     }
