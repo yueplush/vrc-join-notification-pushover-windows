@@ -564,7 +564,11 @@ class TrayIconController:
     def _run(self) -> None:
         if self.icon is None:
             return
-        self.icon.run(self._on_setup, self._on_teardown)
+        icon = self.icon
+        try:
+            icon.run(self._on_setup)
+        finally:
+            self._on_teardown(icon)
 
     def _on_setup(self, icon: "pystray.Icon") -> None:
         self._ready.set()
