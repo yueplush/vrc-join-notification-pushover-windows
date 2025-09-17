@@ -468,6 +468,7 @@ class SessionTracker:
         self.session_started_at = None
         self.session_last_join_at = None
         self.session_last_join_raw = None
+        self.pending_room = None
 
     def ensure_session_ready(self, reason: str) -> bool:
         if self.ready:
