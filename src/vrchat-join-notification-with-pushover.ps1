@@ -1282,10 +1282,10 @@ function Build-UI {
     $layout.Padding = New-Object System.Windows.Forms.Padding(12)
     $layout.ColumnCount = 4
     $layout.RowCount = 6
-    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
-    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
-    $layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
 
     $labelInstall = New-Object System.Windows.Forms.Label
     $labelInstall.Text = 'Install Folder (logs/cache):'
@@ -1296,7 +1296,7 @@ function Build-UI {
     $installBox.Text = $Config.InstallDir
     $installBox.Dock = 'Fill'
     $layout.Controls.Add($installBox, 1, 0)
-    $layout.SetColumnSpan($installBox, 2)
+    [void]$layout.SetColumnSpan($installBox, 2)
 
     $browseInstall = New-Object System.Windows.Forms.Button
     $browseInstall.Text = 'Browse…'
@@ -1319,7 +1319,7 @@ function Build-UI {
     $logBox.Text = $Config.VRChatLogDir
     $logBox.Dock = 'Fill'
     $layout.Controls.Add($logBox, 1, 1)
-    $layout.SetColumnSpan($logBox, 2)
+    [void]$layout.SetColumnSpan($logBox, 2)
 
     $browseLog = New-Object System.Windows.Forms.Button
     $browseLog.Text = 'Browse…'
@@ -1341,10 +1341,10 @@ function Build-UI {
     $poPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $poPanel.ColumnCount = 4
     $poPanel.Dock = 'Fill'
-    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
-    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    $poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    [void]$poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    [void]$poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
 
     $poUserLabel = New-Object System.Windows.Forms.Label
     $poUserLabel.Text = 'User Key:'
@@ -1369,12 +1369,12 @@ function Build-UI {
     $poPanel.Controls.Add($poTokenBox, 3, 0)
 
     $layout.Controls.Add($poPanel, 1, 2)
-    $layout.SetColumnSpan($poPanel, 3)
+    [void]$layout.SetColumnSpan($poPanel, 3)
 
     $buttonPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $buttonPanel.ColumnCount = 4
     $buttonPanel.Dock = 'Top'
-    foreach($i in 0..3){ $buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
+    foreach($i in 0..3){ [void]$buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
 
     $saveRestart = New-Object System.Windows.Forms.Button
     $saveRestart.Text = 'Save && Restart Monitoring'
@@ -1401,12 +1401,12 @@ function Build-UI {
     $quitBtn.Add_Click({ Quit-App })
 
     $layout.Controls.Add($buttonPanel, 0, 3)
-    $layout.SetColumnSpan($buttonPanel, 4)
+    [void]$layout.SetColumnSpan($buttonPanel, 4)
 
     $extraPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $extraPanel.ColumnCount = 4
     $extraPanel.Dock = 'Top'
-    foreach($i in 0..3){ $extraPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
+    foreach($i in 0..3){ [void]$extraPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
 
     $addStartup = New-Object System.Windows.Forms.Button
     $addStartup.Text = 'Add to Startup'
@@ -1427,7 +1427,7 @@ function Build-UI {
     $saveBtn.Add_Click({ Save-Only })
 
     $layout.Controls.Add($extraPanel, 0, 4)
-    $layout.SetColumnSpan($extraPanel, 4)
+    [void]$layout.SetColumnSpan($extraPanel, 4)
 
     $statusGroup = New-Object System.Windows.Forms.GroupBox
     $statusGroup.Text = 'Status'
@@ -1436,8 +1436,8 @@ function Build-UI {
     $statusTable = New-Object System.Windows.Forms.TableLayoutPanel
     $statusTable.Dock = 'Fill'
     $statusTable.ColumnCount = 2
-    $statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    $statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 
     $addStatusRow = {
         param([System.Windows.Forms.TableLayoutPanel]$Table, [string]$LabelText)
@@ -1464,7 +1464,7 @@ function Build-UI {
 
     $statusGroup.Controls.Add($statusTable)
     $layout.Controls.Add($statusGroup, 0, 5)
-    $layout.SetColumnSpan($statusGroup, 4)
+    [void]$layout.SetColumnSpan($statusGroup, 4)
 
     $form.Controls.Add($layout)
 
