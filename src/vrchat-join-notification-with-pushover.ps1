@@ -1152,15 +1152,17 @@ function Get-LauncherPath {
 
 function Get-AppIcon {
     $candidates = @()
-    if($PSScriptRoot){
-        $candidates += Join-Path $PSScriptRoot $IconFileName
-        $candidates += Join-Path $PSScriptRoot ('vrchat_join_notification\' + $IconFileName)
+    $addCandidates = {
+        param([string]$BasePath)
+        if(-not $BasePath){ return }
+        $candidates += Join-Path $BasePath $IconFileName
+        $candidates += Join-Path (Join-Path $BasePath 'vrchat_join_notification') $IconFileName
+        $candidates += Join-Path (Join-Path $BasePath 'src') $IconFileName
+        $candidates += Join-Path (Join-Path (Join-Path $BasePath 'src') 'vrchat_join_notification') $IconFileName
     }
+    if($PSScriptRoot){ & $addCandidates $PSScriptRoot }
     $launcherDir = Split-Path (Get-LauncherPath) -Parent
-    if($launcherDir){
-        $candidates += Join-Path $launcherDir $IconFileName
-        $candidates += Join-Path $launcherDir ('vrchat_join_notification\' + $IconFileName)
-    }
+    if($launcherDir){ & $addCandidates $launcherDir }
     foreach($candidate in $candidates){
         if($candidate -and (Test-Path $candidate)){
             try { return New-Object System.Drawing.Icon($candidate) } catch {}
