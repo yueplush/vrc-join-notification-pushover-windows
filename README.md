@@ -16,11 +16,13 @@ player with a toast and (optionally) a Pushover push.
    cd vrchat-join-notification-with-pushover
    Install-Module -Name ps2exe -Scope CurrentUser   # only if you want an .exe
    ```
-2. Run the script or build an executable:
+2. if you want to test app, Run the script 
    ```powershell
    # run directly
    .\src\vrchat-join-notification-with-pushover.ps1
-
+   ```
+or build an executable:
+   ```powershell
    # or package
    Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
      -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
