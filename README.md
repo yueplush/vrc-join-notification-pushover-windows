@@ -59,7 +59,8 @@ or build an executable (after importing the module):
 1. Update and install dependencies:
    ```bash
    sudo pacman -Syu
-   sudo pacman -S python python-pip python-virtualenv tk libnotify procps-ng pipx
+   sudo pacman -S python python-pip python-virtualenv tk libnotify procps-ng
+   yay -S python-pipx
    ```
 2. Install the app. `pipx` keeps the CLI on your `$PATH` without touching system Python packages:
    ```bash
