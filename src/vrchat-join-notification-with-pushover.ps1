@@ -97,8 +97,18 @@ function Expand-PathSafe {
 function Ensure-Dir {
     Param([string]$Path)
     if([string]::IsNullOrWhiteSpace($Path)){ return }
-    if(-not (Test-Path -Path $Path -PathType Container)){
-        New-Item -Path $Path -ItemType Directory -Force | Out-Null
+    $target = $Path
+    try {
+        $target = [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        $target = $Path
+    }
+    try {
+        [System.IO.Directory]::CreateDirectory($target) | Out-Null
+    } catch [System.UnauthorizedAccessException] {
+        throw "Access to '$target' was denied: $($_.Exception.Message)"
+    } catch {
+        throw
     }
 }
 
@@ -1284,7 +1294,14 @@ function Update-ConfigFromForm {
 function Start-Monitoring {
     if($script:MonitorThread -and $script:MonitorThread.IsAlive){ return }
     Update-ConfigFromForm
-    Ensure-Dir $script:Config.InstallDir
+    try {
+        Ensure-Dir $script:Config.InstallDir
+    } catch {
+        $message = "Failed to prepare install folder '$($script:Config.InstallDir)': $($_.Exception.Message)"
+        Write-AppLog $message
+        [System.Windows.Forms.MessageBox]::Show($message, $AppName, 'OK', 'Error') | Out-Null
+        return
+    }
     $script:MonitorTokenSource = New-Object System.Threading.CancellationTokenSource
     $token = $script:MonitorTokenSource.Token
     $start = [System.Threading.ParameterizedThreadStart]{ param($ct) Monitor-Loop $ct }
