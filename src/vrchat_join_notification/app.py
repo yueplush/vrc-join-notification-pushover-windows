@@ -948,7 +948,13 @@ class SessionTracker:
         return True
 
     def notify_all(
-        self, key: str, title: str, message: str, *, desktop: bool = True
+        self,
+        key: str,
+        title: str,
+        message: str,
+        *,
+        desktop: bool = True,
+        pushover: bool = True,
     ) -> None:
         now = datetime.utcnow()
         previous = self.last_notified.get(key)
@@ -958,7 +964,8 @@ class SessionTracker:
         self.last_notified[key] = now
         if desktop:
             self.notifier.send(title, message)
-        self.pushover.send(title, message)
+        if pushover:
+            self.pushover.send(title, message)
 
     def handle_log_switch(self, path: str) -> None:
         self.logger.log(f"Switching to newest log: {path}")
@@ -1191,7 +1198,14 @@ class SessionTracker:
             if placeholder_lower == "a player":
                 desktop_notification = False
         message = f"{message_name} joined your instance."
-        self.notify_all(join_key, APP_NAME, message, desktop=desktop_notification)
+        pushover_notification = not was_placeholder
+        self.notify_all(
+            join_key,
+            APP_NAME,
+            message,
+            desktop=desktop_notification,
+            pushover=pushover_notification,
+        )
         log_line = f"Session {self.session_id}: player joined '{cleaned_name}'"
         if cleaned_user:
             log_line += f" ({cleaned_user})"
