@@ -9,7 +9,8 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 - Silently ignores the redundant generic desktop toast (`A player joined your instance.`) so only the richer, name-aware notification remains on Windows and Linux.
 - Debounces duplicate events with configurable cooldowns.
 - Optional Pushover integration in addition to local desktop notifications.
-- Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing). The Windows window now matches the Linux layout, including the live status fields.
+- Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing). The Windows window now matches the Linux layout, including the live status fields and compact spacing.
+- Windows builds guard against multiple launches and continue to raise desktop notifications (even when packaged as a `.exe`) by dispatching them through the UI thread.
 - Linux build offers one-click login startup integration that writes/removes the `.desktop` autostart entry for you and confirms the action with a desktop notification.
 
 ## Repository layout
@@ -52,7 +53,8 @@ cd vrchat-join-notification-with-pushover
    `vrchat_join_notification` subfolder variants), so keep the icon alongside the `.exe` when redistributing a packaged copy.
 3. Open **Settings** from the tray icon (or via the window) to configure the install/cache folder, VRChat log directory, and optional Pushover credentials.
    The WinForms UI now mirrors the Linux layout with live **Status**, **Monitoring**, **Current Log**, **Session**, and **Last Event** indicators so you can see exactly what the watcher is doing.
-   The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops) and wraps long status text automatically, and the action buttons inherit the slimmer spacing used by the Linux port for a consistent look.
+   The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops), trims the extra padding around each field, and wraps long status text automatically, while the action buttons inherit the slimmer spacing used by the Linux port for a consistent look.
+   Launching the packaged `.exe` while another copy is running now surfaces an informational dialog instead of starting a duplicate instance, and desktop notifications are marshalled onto the UI thread so Windows toasts fire reliably again.
 
 > [!NOTE]
 > The rewritten Windows script uses the same parsing and session logic as the Linux edition, including Unicode-safe string handling. All non-ASCII characters (Japanese log phrases, dash variants, etc.) are emitted explicitly so Windows PowerShell 5.1 and `ps2exe` builds remain reliable on localized systems.
