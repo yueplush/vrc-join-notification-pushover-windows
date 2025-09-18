@@ -1237,6 +1237,7 @@ class AppController:
             self.status_var.set(
                 f"{self.status_var.get()} Tray icon disabled: {reason}"
             )
+        self._refresh_window_metrics()
 
     def _build_ui(self) -> None:
         self.root.title(f"{APP_NAME} (Linux)")
@@ -1246,8 +1247,10 @@ class AppController:
         except (AttributeError, tk.TclError):
             # Some window managers or Tk builds may not support updating the class name.
             pass
-        main = ttk.Frame(self.root, padding=12)
-        main.pack(fill=tk.BOTH, expand=True)
+        self._init_styles()
+
+        main = ttk.Frame(self.root, padding=16, style="Card.TFrame")
+        main.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
 
         main.columnconfigure(1, weight=1)
         main.columnconfigure(3, weight=1)
@@ -1256,12 +1259,22 @@ class AppController:
         ttk.Label(main, text="Install Folder (logs/cache):").grid(row=0, column=0, sticky=tk.W)
         install_entry = ttk.Entry(main, textvariable=self.install_var)
         install_entry.grid(row=0, column=1, columnspan=3, sticky=tk.EW, padx=(0, 6))
-        ttk.Button(main, text="Browse…", command=self._browse_install).grid(row=0, column=4, sticky=tk.E)
+        ttk.Button(
+            main,
+            text="Browse…",
+            command=self._browse_install,
+            style="Slim.TButton",
+        ).grid(row=0, column=4, sticky=tk.E)
 
         ttk.Label(main, text="VRChat Log Folder:").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
         log_entry = ttk.Entry(main, textvariable=self.log_dir_var)
         log_entry.grid(row=1, column=1, columnspan=3, sticky=tk.EW, padx=(0, 6), pady=(8, 0))
-        ttk.Button(main, text="Browse…", command=self._browse_logs).grid(row=1, column=4, sticky=tk.E, pady=(8, 0))
+        ttk.Button(
+            main,
+            text="Browse…",
+            command=self._browse_logs,
+            style="Slim.TButton",
+        ).grid(row=1, column=4, sticky=tk.E, pady=(8, 0))
 
         ttk.Label(main, text="Pushover User Key:").grid(row=2, column=0, sticky=tk.W, pady=(12, 0))
         user_entry = ttk.Entry(main, textvariable=self.user_var, show="*")
@@ -1271,7 +1284,7 @@ class AppController:
         token_entry = ttk.Entry(main, textvariable=self.token_var, show="*")
         token_entry.grid(row=2, column=3, sticky=tk.EW, padx=(0, 6), pady=(12, 0))
 
-        button_frame = ttk.Frame(main)
+        button_frame = ttk.Frame(main, style="Card.TFrame")
         button_frame.grid(row=3, column=0, columnspan=5, sticky=tk.EW, pady=(16, 0))
         for column in range(4):
             button_frame.columnconfigure(column, weight=1)
@@ -1280,6 +1293,7 @@ class AppController:
             button_frame,
             text="Save & Restart Monitoring",
             command=self.save_and_restart,
+            style="Slim.TButton",
         )
         self.save_restart_button.grid(row=0, column=0, padx=4, sticky=tk.EW)
 
@@ -1287,6 +1301,7 @@ class AppController:
             button_frame,
             text="Start Monitoring",
             command=self.start_monitoring,
+            style="Slim.TButton",
         )
         self.start_button.grid(row=0, column=1, padx=4, sticky=tk.EW)
 
@@ -1294,6 +1309,7 @@ class AppController:
             button_frame,
             text="Stop Monitoring",
             command=self.stop_monitoring,
+            style="Slim.TButton",
         )
         self.stop_button.grid(row=0, column=2, padx=4, sticky=tk.EW)
 
@@ -1301,6 +1317,7 @@ class AppController:
             button_frame,
             text="Add to Startup",
             command=self.add_to_startup,
+            style="Slim.TButton",
         )
         self.add_startup_button.grid(row=1, column=0, padx=4, pady=(8, 0), sticky=tk.EW)
 
@@ -1308,6 +1325,7 @@ class AppController:
             button_frame,
             text="Remove from Startup",
             command=self.remove_from_startup,
+            style="Slim.TButton",
         )
         self.remove_startup_button.grid(row=1, column=1, padx=4, pady=(8, 0), sticky=tk.EW)
 
@@ -1315,6 +1333,7 @@ class AppController:
             button_frame,
             text="Save",
             command=self.save_only,
+            style="Slim.TButton",
         )
         self.save_button.grid(row=1, column=2, padx=4, pady=(8, 0), sticky=tk.EW)
 
@@ -1322,12 +1341,13 @@ class AppController:
             button_frame,
             text="Quit",
             command=self.request_quit,
+            style="Slim.TButton",
         )
         self.quit_button.grid(row=1, column=3, padx=4, pady=(8, 0), sticky=tk.EW)
 
         button_frame.grid_rowconfigure(1, weight=1)
 
-        status_frame = ttk.Frame(main, padding=(0, 12, 0, 0))
+        status_frame = ttk.Frame(main, padding=(0, 12, 0, 0), style="Card.TFrame")
         status_frame.grid(row=4, column=0, columnspan=5, sticky=tk.NSEW)
         status_frame.columnconfigure(1, weight=1)
 
@@ -1367,11 +1387,84 @@ class AppController:
         self.root.bind("<Unmap>", self._on_unmap)
         self._update_startup_buttons()
 
-        self.root.update_idletasks()
+        self._refresh_window_metrics()
+
+    def _init_styles(self) -> ttk.Style:
+        style = ttk.Style(self.root)
+        preferred_themes = ("clam", "alt", style.theme_use())
+        for candidate in preferred_themes:
+            if candidate not in style.theme_names():
+                continue
+            try:
+                style.theme_use(candidate)
+            except tk.TclError:
+                continue
+            else:
+                break
+
+        base_background = "#f6f5f4"
+        surface_background = "#ffffff"
+        text_colour = "#1c1c1c"
+        accent_colour = "#3584e4"
+        subdued_border = "#d3d7cf"
+
+        self.root.configure(background=base_background)
+        style.configure("TFrame", background=surface_background)
+        style.configure("Card.TFrame", background=surface_background)
+        style.configure("TLabel", background=surface_background, foreground=text_colour)
+        style.configure(
+            "Slim.TButton",
+            background=surface_background,
+            foreground=text_colour,
+            padding=(9, 5),
+            borderwidth=1,
+            relief="flat",
+            focusthickness=1,
+            focuscolor=accent_colour,
+        )
+        try:
+            style.map(
+                "Slim.TButton",
+                background=[
+                    ("pressed", "#d0d0d0"),
+                    ("active", "#e4e4e4"),
+                    ("disabled", base_background),
+                ],
+                foreground=[("disabled", "#8d8d8d")],
+                bordercolor=[("focus", accent_colour), ("!focus", subdued_border)],
+            )
+        except tk.TclError:
+            style.map(
+                "Slim.TButton",
+                background=[
+                    ("pressed", "#d0d0d0"),
+                    ("active", "#e4e4e4"),
+                    ("disabled", base_background),
+                ],
+                foreground=[("disabled", "#8d8d8d")],
+            )
+
+        style.configure("TEntry", fieldbackground="#fdfdfd", padding=4)
+        try:
+            style.map("TEntry", fieldbackground=[("disabled", base_background)])
+        except tk.TclError:
+            pass
+
+        return style
+
+    def _refresh_window_metrics(self) -> None:
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
         required_width = max(720, self.root.winfo_reqwidth())
         required_height = self.root.winfo_reqheight()
         self.root.minsize(required_width, required_height)
-        self.root.geometry(f"{required_width}x{required_height}")
+        current_width = self.root.winfo_width()
+        current_height = self.root.winfo_height()
+        width = max(current_width, required_width)
+        height = max(current_height, required_height)
+        self.root.geometry(f"{width}x{height}")
 
     def _browse_install(self) -> None:
         directory = filedialog.askdirectory(initialdir=self.install_var.get() or os.getcwd())
