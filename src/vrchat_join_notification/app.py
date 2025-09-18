@@ -1941,7 +1941,7 @@ class AppController:
         except Exception:
             return False
 
-def _update_startup_buttons(self) -> None:
+    def _update_startup_buttons(self) -> None:
         exists = self._autostart_entry_exists()
         if hasattr(self, "add_startup_button"):
             if exists:
