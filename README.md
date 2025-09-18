@@ -9,11 +9,15 @@ player with a toast and (optionally) a Pushover push.
 - Windows ships as a PowerShell script that you can run directly or package as a standalone `.exe`.
 - Linux installs as a Python application with a Tk GUI, system tray support (when available), and optional Pushover integration.
 
+# git clone
+   ```bash/powershell
+git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+cd vrchat-join-notification-with-pushover
+   ```
+
 ## Windows quick start
 1. Clone the repository and install the optional packaging tool:
    ```powershell
-   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   cd vrchat-join-notification-with-pushover
    Install-Module -Name ps2exe -Scope CurrentUser   # only if you want an .exe
    Import-Module ps2exe                              # load it for this session
    ```
