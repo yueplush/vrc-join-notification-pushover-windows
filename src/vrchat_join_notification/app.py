@@ -1650,11 +1650,40 @@ class AppController:
 
     def start_monitoring(self) -> None:
         self.stop_monitoring()
-        self.config.vrchat_log_dir = _expand_path(self.log_dir_var.get())
-        self.config.install_dir = _expand_path(self.install_var.get())
-        self.config.ensure_install_dir()
-        self.monitor = LogMonitor(self.config, self.event_queue, self.logger)
-        self.monitor.start()
+        new_log_dir = _expand_path(self.log_dir_var.get())
+        new_install_dir = _expand_path(self.install_var.get())
+        previous_log_dir = self.config.vrchat_log_dir
+        previous_install_dir = self.config.install_dir
+        try:
+            self.config.vrchat_log_dir = new_log_dir
+            self.config.install_dir = new_install_dir
+            self.config.ensure_install_dir()
+            monitor = LogMonitor(self.config, self.event_queue, self.logger)
+            monitor.start()
+        except Exception as exc:
+            self.config.vrchat_log_dir = previous_log_dir
+            self.config.install_dir = previous_install_dir
+            self.monitor = None
+            self.monitor_status_var.set("Stopped")
+            error_text = (
+                "Failed to start monitoring "
+                f"(install folder '{new_install_dir}'): {exc}"
+            )
+            self.status_var.set(error_text)
+            self.logger.log(error_text)
+            try:
+                messagebox.showerror(
+                    APP_NAME,
+                    "Failed to start monitoring:\n"
+                    f"Install folder: {new_install_dir}\n{exc}",
+                )
+            except tk.TclError:
+                pass
+            self.install_var.set(previous_install_dir)
+            self.log_dir_var.set(previous_log_dir)
+            self._update_tray_state()
+            return
+        self.monitor = monitor
         self.monitor_status_var.set("Running")
         self.status_var.set("Monitoring VRChat logs…")
         self.logger.log("Monitoring started.")
