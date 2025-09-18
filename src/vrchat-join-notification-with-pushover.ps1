@@ -332,11 +332,19 @@ function Load-AppConfig {
     $logDir = Guess-VRChatLogDir
     $user = ''
     $token = ''
+    $autoHide = $false
     if($data){
         if($data.PSObject.Properties['InstallDir']){ $install = Expand-PathSafe([string]$data.InstallDir) }
         if($data.PSObject.Properties['VRChatLogDir']){ $logDir = Expand-PathSafe([string]$data.VRChatLogDir) }
         if($data.PSObject.Properties['PushoverUser']){ $user = [string]$data.PushoverUser }
         if($data.PSObject.Properties['PushoverToken']){ $token = [string]$data.PushoverToken }
+        if($data.PSObject.Properties['AutoHideOnLaunch']){
+            try {
+                $autoHide = [System.Convert]::ToBoolean($data.AutoHideOnLaunch)
+            } catch {
+                $autoHide = $false
+            }
+        }
     }
     $cfg = [pscustomobject]@{
         InstallDir    = $install
@@ -344,6 +352,7 @@ function Load-AppConfig {
         PushoverUser  = $user
         PushoverToken = $token
         FirstRun      = $firstRun
+        AutoHideOnLaunch = $autoHide
     }
     return ,@($cfg, $loadError)
 }
@@ -356,8 +365,9 @@ function Save-AppConfig {
     }
     Ensure-Dir $Config.InstallDir
     $payload = [ordered]@{
-        InstallDir   = $Config.InstallDir
-        VRChatLogDir = $Config.VRChatLogDir
+        InstallDir       = $Config.InstallDir
+        VRChatLogDir     = $Config.VRChatLogDir
+        AutoHideOnLaunch = [bool]$Config.AutoHideOnLaunch
     }
     if(-not [string]::IsNullOrWhiteSpace($Config.PushoverUser)){
         $payload['PushoverUser'] = $Config.PushoverUser
@@ -1383,6 +1393,7 @@ function Update-ConfigFromForm {
     if($script:Controls.LogDir){ $script:Config.VRChatLogDir = Expand-PathSafe $script:Controls.LogDir.Text }
     if($script:Controls.POUser){ $script:Config.PushoverUser = $script:Controls.POUser.Text.Trim() }
     if($script:Controls.POToken){ $script:Config.PushoverToken = $script:Controls.POToken.Text.Trim() }
+    if($script:Controls.AutoHide){ $script:Config.AutoHideOnLaunch = [bool]$script:Controls.AutoHide.Checked }
 }
 function Start-Monitoring {
     if($script:MonitorThread -and $script:MonitorThread.IsAlive){ return }
@@ -1719,12 +1730,12 @@ function Build-UI {
     $layout.Margin = New-Object System.Windows.Forms.Padding(0)
     $layout.Padding = New-Object System.Windows.Forms.Padding(12, 12, 12, 10)
     $layout.ColumnCount = 4
-    $layout.RowCount = 6
+    $layout.RowCount = 7
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    foreach($i in 0..4){
+    foreach($i in 0..5){
         [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     }
     [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
@@ -1825,6 +1836,14 @@ function Build-UI {
     $layout.Controls.Add($poPanel, 1, 2)
     [void]$layout.SetColumnSpan($poPanel, 3)
 
+    $autoHideCheck = New-Object System.Windows.Forms.CheckBox
+    $autoHideCheck.Text = 'Hide window on launch when monitoring automatically (tray icon only)'
+    $autoHideCheck.AutoSize = $true
+    $autoHideCheck.Margin = New-Object System.Windows.Forms.Padding(0, 10, 0, 6)
+    $autoHideCheck.Checked = [bool]$Config.AutoHideOnLaunch
+    $layout.Controls.Add($autoHideCheck, 0, 3)
+    [void]$layout.SetColumnSpan($autoHideCheck, 4)
+
     $buttonPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $buttonPanel.ColumnCount = 3
     $buttonPanel.Dock = 'Fill'
@@ -1857,7 +1876,7 @@ function Build-UI {
     $buttonPanel.Controls.Add($saveRestart, 2, 0)
     $saveRestart.Add_Click({ Save-And-Restart })
 
-    $layout.Controls.Add($buttonPanel, 0, 3)
+    $layout.Controls.Add($buttonPanel, 0, 4)
     [void]$layout.SetColumnSpan($buttonPanel, 4)
 
     $extraPanel = New-Object System.Windows.Forms.TableLayoutPanel
@@ -1898,7 +1917,7 @@ function Build-UI {
     $extraPanel.Controls.Add($quitBtn, 3, 0)
     $quitBtn.Add_Click({ Quit-App })
 
-    $layout.Controls.Add($extraPanel, 0, 4)
+    $layout.Controls.Add($extraPanel, 0, 5)
     [void]$layout.SetColumnSpan($extraPanel, 4)
 
     $statusGroup = New-Object System.Windows.Forms.GroupBox
@@ -1943,7 +1962,7 @@ function Build-UI {
     $lastEventValue = & $addStatusRow $statusTable 'Last event:'
 
     $statusGroup.Controls.Add($statusTable)
-    $layout.Controls.Add($statusGroup, 0, 5)
+    $layout.Controls.Add($statusGroup, 0, 6)
     [void]$layout.SetColumnSpan($statusGroup, 4)
 
     $form.Controls.Add($layout)
@@ -1990,6 +2009,7 @@ function Build-UI {
         StatusGroup   = $statusGroup
         StatusTable   = $statusTable
         StatusLabels  = @($statusValue, $monitorValue, $currentLogValue, $sessionValue, $lastEventValue)
+        AutoHide      = $autoHideCheck
     }
 
     Update-StatusLabelWidths
@@ -2046,8 +2066,15 @@ function Apply-StartupState {
         Start-Monitoring
         if($OpenSettings){
             Show-Window
-        } else {
+            return
+        }
+        if($script:Config.AutoHideOnLaunch){
             Hide-Window
+            Send-DesktopNotification $AppName 'Monitoring in the background. Use the tray icon to reopen settings.'
+            Write-AppLog 'Monitoring started hidden because AutoHideOnLaunch is enabled.'
+        } else {
+            Set-Status 'Monitoring active. Close this window or enable "Hide window on launch" to run from the tray.'
+            Show-Window
         }
         return
     }
