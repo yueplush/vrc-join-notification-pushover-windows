@@ -61,6 +61,7 @@ $script:Session = [ordered]@{
 $script:Controls = @{}
 $script:SingleInstanceMutex = $null
 $script:HasMutexOwnership = $false
+$script:AdditionalMutexes = @()
 
 # ----------------------------- Helper utils ------------------------------
 function Expand-PathSafe {
@@ -82,32 +83,118 @@ function Ensure-Dir {
     }
 }
 
-function Acquire-SingleInstance {
-    Param([string]$Name)
-    if([string]::IsNullOrWhiteSpace($Name)){ return $true }
-    try {
-        $createdNew = $false
-        $script:SingleInstanceMutex = New-Object System.Threading.Mutex($true, $Name, [ref]$createdNew)
-        $script:HasMutexOwnership = $createdNew
-        return $createdNew
-    } catch {
-        $script:SingleInstanceMutex = $null
-        $script:HasMutexOwnership = $false
-        return $true
+function Get-SingleInstanceMutexNames {
+    $names = New-Object System.Collections.Generic.List[string]
+    $add = {
+        param($value)
+        if([string]::IsNullOrWhiteSpace($value)){ return }
+        if(-not $names.Contains($value)){
+            $names.Add($value) | Out-Null
+        }
     }
+    & $add 'Global\VRChatJoinNotificationWithPushover'
+    try {
+        $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        if(-not [string]::IsNullOrWhiteSpace($sid)){
+            & $add "VRChatJoinNotificationWithPushover_$sid"
+        }
+    } catch {}
+    $userName = [Environment]::UserName
+    if(-not [string]::IsNullOrWhiteSpace($userName)){
+        & $add "VRChatJoinNotificationWithPushover_$userName"
+    }
+    return ,@($names.ToArray())
+}
+
+function Acquire-SingleInstance {
+    Param([string[]]$Names)
+    $script:SingleInstanceMutex = $null
+    $script:AdditionalMutexes = @()
+    $script:HasMutexOwnership = $false
+    if(-not $Names -or $Names.Count -eq 0){ return $true }
+    $acquired = New-Object System.Collections.Generic.List[System.Threading.Mutex]
+    $releaseAcquired = {
+        param($mutexes)
+        foreach($held in $mutexes){
+            if(-not $held){ continue }
+            try { $held.ReleaseMutex() } catch {}
+            try { $held.Dispose() } catch {}
+        }
+        $mutexes.Clear()
+    }
+    foreach($name in $Names){
+        if([string]::IsNullOrWhiteSpace($name)){ continue }
+        $mutex = $null
+        try {
+            $createdNew = $false
+            $mutex = New-Object System.Threading.Mutex($false, $name, [ref]$createdNew)
+        } catch [System.UnauthorizedAccessException] {
+            try {
+                $mutex = [System.Threading.Mutex]::OpenExisting($name)
+            } catch [System.Threading.WaitHandleCannotBeOpenedException] {
+                continue
+            } catch [System.UnauthorizedAccessException] {
+                & $releaseAcquired $acquired
+                return $false
+            } catch {
+                continue
+            }
+        } catch {
+            continue
+        }
+        if(-not $mutex){ continue }
+        $acquiredThis = $false
+        try {
+            if($mutex.WaitOne(0, $false)){
+                $acquiredThis = $true
+            } else {
+                & $releaseAcquired $acquired
+                try { $mutex.Dispose() } catch {}
+                return $false
+            }
+        } catch [System.Threading.AbandonedMutexException] {
+            $acquiredThis = $true
+        } catch {
+            & $releaseAcquired $acquired
+            try { $mutex.Dispose() } catch {}
+            return $false
+        }
+        if($acquiredThis){
+            $acquired.Add($mutex) | Out-Null
+        }
+    }
+    if($acquired.Count -eq 0){ return $false }
+    $script:SingleInstanceMutex = $acquired[0]
+    if($acquired.Count -gt 1){
+        $script:AdditionalMutexes = $acquired.GetRange(1, $acquired.Count - 1)
+    } else {
+        $script:AdditionalMutexes = @()
+    }
+    $script:HasMutexOwnership = $true
+    return $true
 }
 
 function Release-SingleInstance {
-    if(-not $script:SingleInstanceMutex){ return }
-    try {
-        if($script:HasMutexOwnership){
-            $script:SingleInstanceMutex.ReleaseMutex()
-        }
-    } catch {}
-    try {
-        $script:SingleInstanceMutex.Dispose()
-    } catch {}
+    $mutexes = @()
+    if($script:SingleInstanceMutex){
+        $mutexes += ,$script:SingleInstanceMutex
+    }
+    if($script:AdditionalMutexes){
+        $mutexes += $script:AdditionalMutexes
+    }
+    foreach($mutex in $mutexes){
+        if(-not $mutex){ continue }
+        try {
+            if($script:HasMutexOwnership){
+                $mutex.ReleaseMutex()
+            }
+        } catch {}
+        try {
+            $mutex.Dispose()
+        } catch {}
+    }
     $script:SingleInstanceMutex = $null
+    $script:AdditionalMutexes = @()
     $script:HasMutexOwnership = $false
 }
 
@@ -1738,8 +1825,8 @@ function Main {
     [System.Windows.Forms.Application]::Run($form)
 }
 
-$mutexName = 'Global\\VRChatJoinNotificationWithPushover'
-if(-not (Acquire-SingleInstance -Name $mutexName)){
+$mutexNames = Get-SingleInstanceMutexNames
+if(-not (Acquire-SingleInstance -Names $mutexNames)){
     [System.Windows.Forms.MessageBox]::Show("$AppName is already running.", $AppName, 'OK', 'Information') | Out-Null
     Release-SingleInstance
     return
