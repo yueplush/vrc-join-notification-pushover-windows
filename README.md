@@ -48,6 +48,8 @@ cd vrchat-join-notification-with-pushover
    Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
      -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
    ```
+   The compiled build now searches next to the executable for both `notification.ico` and `src\notification.ico` (plus their
+   `vrchat_join_notification` subfolder variants), so keep the icon alongside the `.exe` when redistributing a packaged copy.
 3. Open **Settings** from the tray icon (or via the window) to configure the install/cache folder, VRChat log directory, and optional Pushover credentials.
    The WinForms UI now mirrors the Linux layout with live **Status**, **Monitoring**, **Current Log**, **Session**, and **Last Event** indicators so you can see exactly what the watcher is doing.
    The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops) and wraps long status text automatically, and the action buttons inherit the slimmer spacing used by the Linux port for a consistent look.
