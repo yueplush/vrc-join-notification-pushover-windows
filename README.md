@@ -15,13 +15,18 @@ player with a toast and (optionally) a Pushover push.
    git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
    cd vrchat-join-notification-with-pushover
    Install-Module -Name ps2exe -Scope CurrentUser   # only if you want an .exe
+   Import-Module ps2exe                              # load it for this session
    ```
-2. if you want to test app, Run the script 
+   > **Note**
+   > If `Invoke-ps2exe` says the module could not be loaded, make sure the
+   > `Import-Module ps2exe` command above has completed successfully or start a
+   > new PowerShell session after installing the module.
+2. If you want to test the app, run the script:
    ```powershell
    # run directly
    .\src\vrchat-join-notification-with-pushover.ps1
    ```
-or build an executable:
+or build an executable (after importing the module):
    ```powershell
    # or package
    Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
