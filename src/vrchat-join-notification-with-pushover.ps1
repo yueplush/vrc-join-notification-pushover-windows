@@ -321,14 +321,20 @@ function Write-AppLog {
     Param([string]$Message)
     if(-not $script:Config){ return }
     if([string]::IsNullOrWhiteSpace($script:Config.InstallDir)){ return }
-    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $timestamp = ([System.DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss')
     $line = "[$timestamp] $Message"
     try {
         Ensure-Dir $script:Config.InstallDir
-        $logPath = Join-Path $script:Config.InstallDir $AppLogName
+        $logPath = [System.IO.Path]::Combine($script:Config.InstallDir, $AppLogName)
         [System.Threading.Monitor]::Enter($script:LoggerLock)
         try {
-            Add-Content -Path $logPath -Value $line -Encoding UTF8
+            $writer = $null
+            try {
+                $writer = [System.IO.StreamWriter]::new($logPath, $true, [System.Text.Encoding]::UTF8)
+                $writer.WriteLine($line)
+            } finally {
+                if($writer){ $writer.Dispose() }
+            }
         } finally {
             [System.Threading.Monitor]::Exit($script:LoggerLock)
         }
@@ -574,18 +580,27 @@ function Is-VRChatRunning {
 
 function Score-LogFile {
     Param([string]$Path)
+    $info = $null
     try {
-        $info = Get-Item -LiteralPath $Path -ErrorAction Stop
+        $info = [System.IO.FileInfo]::new($Path)
     } catch {
         return 0.0
     }
+    if(-not $info.Exists){ return 0.0 }
     $best = [double]([DateTimeOffset]$info.LastWriteTimeUtc).ToUnixTimeSeconds()
     $created = [double]([DateTimeOffset]$info.CreationTimeUtc).ToUnixTimeSeconds()
     if($created -gt $best){ $best = $created }
-    $match = [regex]::Match([System.IO.Path]::GetFileName($Path), 'output_log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.txt$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $name = $info.Name
+    $match = [regex]::Match($name, 'output_log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.txt$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if($match.Success){
         try {
-            $dt = Get-Date -Year $match.Groups[1].Value -Month $match.Groups[2].Value -Day $match.Groups[3].Value -Hour $match.Groups[4].Value -Minute $match.Groups[5].Value -Second $match.Groups[6].Value
+            $year = [int]$match.Groups[1].Value
+            $month = [int]$match.Groups[2].Value
+            $day = [int]$match.Groups[3].Value
+            $hour = [int]$match.Groups[4].Value
+            $minute = [int]$match.Groups[5].Value
+            $second = [int]$match.Groups[6].Value
+            $dt = [System.DateTime]::SpecifyKind([datetime]::new($year, $month, $day, $hour, $minute, $second), [System.DateTimeKind]::Local)
             $stamp = [double]([DateTimeOffset]$dt.ToUniversalTime()).ToUnixTimeSeconds()
             if($stamp -gt $best){ $best = $stamp }
         } catch {}
@@ -596,17 +611,32 @@ function Score-LogFile {
 function Get-NewestLogPath {
     Param([string]$LogDir)
     if([string]::IsNullOrWhiteSpace($LogDir)){ return $null }
-    if(-not (Test-Path -Path $LogDir -PathType Container)){ return $null }
+    $expanded = $LogDir
     try {
-        $candidates = Get-ChildItem -Path $LogDir -File -ErrorAction Stop | Where-Object {
-            $_.Name -ieq 'player.log' -or $_.Name -like 'output_log_*'
-        }
+        $expanded = [System.IO.Path]::GetFullPath($LogDir)
+    } catch {}
+    if(-not [System.IO.Directory]::Exists($expanded)){ return $null }
+    $bestScore = [double]::NegativeInfinity
+    $bestPath = $null
+    try {
+        $files = [System.IO.Directory]::EnumerateFiles($expanded)
     } catch {
         return $null
     }
-    if(-not $candidates){ return $null }
-    $sorted = $candidates | Sort-Object { Score-LogFile $_.FullName } -Descending
-    return $sorted[0].FullName
+    foreach($file in $files){
+        if([string]::IsNullOrWhiteSpace($file)){ continue }
+        $name = [System.IO.Path]::GetFileName($file)
+        if(-not $name){ continue }
+        $isPlayerLog = $name.Equals('player.log', [System.StringComparison]::OrdinalIgnoreCase)
+        $isOutputLog = $name.StartsWith('output_log_', [System.StringComparison]::OrdinalIgnoreCase)
+        if(-not ($isPlayerLog -or $isOutputLog)){ continue }
+        $score = Score-LogFile $file
+        if($score -gt $bestScore){
+            $bestScore = $score
+            $bestPath = $file
+        }
+    }
+    return $bestPath
 }
 function Reset-SessionState {
     $script:Session.Ready = $false
@@ -990,9 +1020,9 @@ function Send-PushoverNotification {
         $callback = [System.Action[object]]{
             Param($state)
             try {
-                $client = New-Object System.Net.Http.HttpClient
+                $client = [System.Net.Http.HttpClient]::new()
                 try {
-                    $content = New-Object System.Net.Http.FormUrlEncodedContent($state.Body)
+                    $content = [System.Net.Http.FormUrlEncodedContent]::new($state.Body)
                     $response = $client.PostAsync($state.Uri, $content).GetAwaiter().GetResult()
                     $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
                     try {
@@ -1063,7 +1093,7 @@ function Follow-LogFile {
     try {
         $lastSize = 0
         try {
-            $lastSize = (Get-Item -LiteralPath $normalized -ErrorAction Stop).Length
+            $lastSize = ([System.IO.FileInfo]::new($normalized)).Length
         } catch {
             $lastSize = 0
         }
@@ -1072,9 +1102,9 @@ function Follow-LogFile {
         $fileShare = [System.IO.FileShare]::ReadWrite
         while(-not $Token.IsCancellationRequested){
             try {
-                $fs = New-Object System.IO.FileStream($normalized, $fileMode, $fileAccess, $fileShare)
+                $fs = [System.IO.FileStream]::new($normalized, $fileMode, $fileAccess, $fileShare)
                 try {
-                    $reader = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true)
+                    $reader = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8, $true)
                     $reader.BaseStream.Seek($lastSize, [System.IO.SeekOrigin]::Begin) | Out-Null
                     while(-not $Token.IsCancellationRequested){
                         $position = $reader.BaseStream.Position
@@ -1088,9 +1118,9 @@ function Follow-LogFile {
                             return
                         }
                         try {
-                            $currentSize = (Get-Item -LiteralPath $normalized -ErrorAction Stop).Length
+                            $currentSize = ([System.IO.FileInfo]::new($normalized)).Length
                         } catch {
-                            Start-Sleep -Milliseconds 600
+                            [System.Threading.Thread]::Sleep(600)
                             break
                         }
                         if($currentSize -lt $lastSize){
@@ -1129,7 +1159,16 @@ function Monitor-Loop {
         $lastNoFileWarning = [DateTime]::UtcNow.AddSeconds(-60)
         while(-not $Token.IsCancellationRequested){
             $logDir = $script:Config.VRChatLogDir
-            if([string]::IsNullOrWhiteSpace($logDir) -or -not (Test-Path $logDir -PathType Container)){
+            $hasDir = $false
+            if(-not [string]::IsNullOrWhiteSpace($logDir)){
+                try {
+                    $fullDir = [System.IO.Path]::GetFullPath($logDir)
+                } catch {
+                    $fullDir = $logDir
+                }
+                $hasDir = [System.IO.Directory]::Exists($fullDir)
+            }
+            if(-not $hasDir){
                 if(([DateTime]::UtcNow - $lastDirWarning).TotalSeconds -gt 10){
                     Enqueue-Event 'status' "Waiting for VRChat log directory at $logDir"
                     $lastDirWarning = [DateTime]::UtcNow
