@@ -14,10 +14,55 @@ This PowerShell build mirrors the Python/Tk Linux application:
 - JSON settings stored next to the local cache/log directory.
 #>
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+$script:StartupAppName = 'VRChat Join Notification with Pushover'
+
+function Show-StartupError {
+    Param([string]$Message)
+    if([string]::IsNullOrWhiteSpace($Message)){ return }
+    $caption = $script:StartupAppName
+    $shown = $false
+    try {
+        $shell = New-Object -ComObject WScript.Shell -ErrorAction Stop
+        try {
+            $shell.Popup($Message, 0, $caption, 0x10) | Out-Null
+            $shown = $true
+        } finally {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null } catch {}
+        }
+    } catch {}
+    if(-not $shown){
+        try {
+            Write-Error $Message
+        } catch {}
+    }
+}
+
+function Fail-Startup {
+    Param([string]$Message)
+    Show-StartupError $Message
+    exit 1
+}
+
+function Import-RequiredAssembly {
+    Param(
+        [Parameter(Mandatory=$true)][string]$AssemblyName,
+        [Parameter(Mandatory=$true)][string]$Description
+    )
+    try {
+        Add-Type -AssemblyName $AssemblyName -ErrorAction Stop
+    } catch {
+        $reason = $_.Exception.Message
+        $details = "Failed to load required $Description ($AssemblyName). $reason"
+        Fail-Startup $details
+    }
+}
+
+Import-RequiredAssembly -AssemblyName 'System.Windows.Forms' -Description 'Windows desktop UI components'
+Import-RequiredAssembly -AssemblyName 'System.Drawing' -Description 'drawing components'
+
 if(-not ('NativeMethods.AppUserModel' -as [type])){
-    Add-Type @"
+    try {
+        Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 namespace NativeMethods {
@@ -27,13 +72,22 @@ namespace NativeMethods {
     }
 }
 "@
+    } catch {
+        $reason = $_.Exception.Message
+        Fail-Startup "Failed to initialise native toast helpers. $reason"
+    }
 }
-[System.Windows.Forms.Application]::EnableVisualStyles()
+try {
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+} catch {
+    $reason = $_.Exception.Message
+    Fail-Startup "Failed to enable Windows visual styles. $reason"
+}
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ------------------------------- Constants -------------------------------
-$AppName        = 'VRChat Join Notification with Pushover'
+$AppName        = $script:StartupAppName
 $ConfigFileName = 'config.json'
 $AppLogName     = 'notifier.log'
 $POUrl          = 'https://api.pushover.net/1/messages.json'
