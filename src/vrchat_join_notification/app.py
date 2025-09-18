@@ -52,6 +52,9 @@ SESSION_FALLBACK_GRACE_SECONDS = 30
 SESSION_FALLBACK_MAX_CONTINUATION_SECONDS = 4
 ICON_FILE_NAME = "notification.ico"
 AUTOSTART_FILE_NAME = "vrchat-join-notifier.desktop"
+UNICODE_DASHES = "\u2013\u2014"
+JOIN_SEPARATOR_CHARS = ":|-" + UNICODE_DASHES
+JOIN_SEPARATOR_PATTERN = "[-:|" + UNICODE_DASHES + "]+"
 
 
 def _expand_path(path: str) -> str:
@@ -375,10 +378,10 @@ def normalize_join_fragment(text: str) -> str:
     clean = clean.replace("\u3000", " ")
     clean = clean.strip().strip('"').strip("'")
     clean = clean.replace("||", "|")
-    clean = clean.lstrip("-—–:|").strip()
+    clean = clean.lstrip("-:|" + UNICODE_DASHES).strip()
     if len(clean) > 160:
         clean = clean[:160].strip()
-    if re.fullmatch(r"[-:|–—]+", clean):
+    if re.fullmatch(JOIN_SEPARATOR_PATTERN, clean):
         return ""
     return clean
 
@@ -414,7 +417,7 @@ def parse_player_event_line(line: str, event_token: str = "OnPlayerJoined") -> O
         return None
     after = strip_zero_width(line[index + len(needle) :])
     after = after.strip()
-    while after and after[0] in ":|-–—":
+    while after and after[0] in JOIN_SEPARATOR_CHARS:
         after = after[1:].lstrip()
 
     placeholder = ""
@@ -495,8 +498,26 @@ def parse_room_transition_line(line: str) -> Optional[Dict[str, str]]:
     matched = any(indicator in lower for indicator in indicators)
     if not matched:
         jp_sets = [
-            {"key": "ルーム", "terms": ["参加", "作成", "入室", "移動", "入場"]},
-            {"key": "インスタンス", "terms": ["参加", "作成", "入室", "移動", "入場"]},
+            {
+                "key": "\u30eb\u30fc\u30e0",
+                "terms": [
+                    "\u53c2\u52a0",
+                    "\u4f5c\u6210",
+                    "\u5165\u5ba4",
+                    "\u79fb\u52d5",
+                    "\u5165\u5834",
+                ],
+            },
+            {
+                "key": "\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9",
+                "terms": [
+                    "\u53c2\u52a0",
+                    "\u4f5c\u6210",
+                    "\u5165\u5ba4",
+                    "\u79fb\u52d5",
+                    "\u5165\u5834",
+                ],
+            },
         ]
         for jp in jp_sets:
             if jp["key"] in clean:
@@ -505,7 +526,12 @@ def parse_room_transition_line(line: str) -> Optional[Dict[str, str]]:
                     break
     if not matched:
         if re.search(r"(?i)wrld_[0-9a-f\-]+", clean):
-            if "room" in lower or "instance" in lower or "インスタンス" in clean or "ルーム" in clean:
+            if (
+                "room" in lower
+                or "instance" in lower
+                or "\u30a4\u30f3\u30b9\u30bf\u30f3\u30b9" in clean
+                or "\u30eb\u30fc\u30e0" in clean
+            ):
                 matched = True
     if not matched:
         return None
@@ -1399,7 +1425,7 @@ class AppController:
         install_entry.grid(row=0, column=1, columnspan=3, sticky=tk.EW, padx=(0, 6))
         ttk.Button(
             main,
-            text="Browse…",
+            text="Browse...",
             command=self._browse_install,
             style="Slim.TButton",
         ).grid(row=0, column=4, sticky=tk.E)
@@ -1409,7 +1435,7 @@ class AppController:
         log_entry.grid(row=1, column=1, columnspan=3, sticky=tk.EW, padx=(0, 6), pady=(8, 0))
         ttk.Button(
             main,
-            text="Browse…",
+            text="Browse...",
             command=self._browse_logs,
             style="Slim.TButton",
         ).grid(row=1, column=4, sticky=tk.E, pady=(8, 0))
@@ -1685,7 +1711,7 @@ class AppController:
             return
         self.monitor = monitor
         self.monitor_status_var.set("Running")
-        self.status_var.set("Monitoring VRChat logs…")
+        self.status_var.set("Monitoring VRChat logs...")
         self.logger.log("Monitoring started.")
         self._update_tray_state()
 
@@ -1811,7 +1837,7 @@ class AppController:
     def _session_description(self) -> str:
         if self.session.ready:
             source = self.session.source or "unknown"
-            return f"Session {self.session.session_id} – {source}"
+            return f"Session {self.session.session_id} - {source}"
         return "No active session"
 
     def on_close(self) -> None:
@@ -1861,7 +1887,7 @@ class AppController:
 
     def _update_tray_state(self) -> None:
         monitoring = self.monitor is not None
-        tooltip = f"{APP_NAME} – {'Monitoring' if monitoring else 'Stopped'}"
+        tooltip = f"{APP_NAME} - {'Monitoring' if monitoring else 'Stopped'}"
         session_desc = self._session_description()
         if self.session.ready:
             tooltip += f"\n{session_desc}"
