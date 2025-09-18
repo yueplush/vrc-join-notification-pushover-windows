@@ -2117,15 +2117,59 @@ function Main {
     [System.Windows.Forms.Application]::Run($form)
 }
 
-$mutexNames = Get-SingleInstanceMutexNames
-if(-not (Acquire-SingleInstance -Names $mutexNames)){
-    [System.Windows.Forms.MessageBox]::Show("$AppName is already running.", $AppName, 'OK', 'Information') | Out-Null
-    Release-SingleInstance
-    return
+function Invoke-AppInstance {
+    $mutexNames = Get-SingleInstanceMutexNames
+    if(-not (Acquire-SingleInstance -Names $mutexNames)){
+        try {
+            [System.Windows.Forms.MessageBox]::Show("$AppName is already running.", $AppName, 'OK', 'Information') | Out-Null
+        } catch {}
+        Release-SingleInstance
+        return
+    }
+    try {
+        Main
+    } catch {
+        $msg = "Application failed to start: $($_.Exception.Message)"
+        Show-StartupError $msg
+        return
+    } finally {
+        Release-SingleInstance
+    }
 }
 
-try {
-    Main
-} finally {
-    Release-SingleInstance
+function Ensure-STAAndRun {
+    $currentThread = $null
+    $currentState = [System.Threading.ApartmentState]::Unknown
+    try {
+        $currentThread = [System.Threading.Thread]::CurrentThread
+        $currentState = $currentThread.GetApartmentState()
+    } catch {}
+    if($currentState -eq [System.Threading.ApartmentState]::STA){
+        Invoke-AppInstance
+        return
+    }
+
+    $uiRunspace = $ExecutionContext.Runspace
+    $starter = [System.Threading.ThreadStart]{
+        if($uiRunspace){
+            try {
+                [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace = $uiRunspace
+            } catch {}
+        }
+        Invoke-AppInstance
+    }.GetNewClosure()
+
+    try {
+        $thread = New-Object System.Threading.Thread($starter)
+        try { $thread.Name = "$AppName UI Thread" } catch {}
+        $thread.SetApartmentState([System.Threading.ApartmentState]::STA)
+        $thread.IsBackground = $false
+        $thread.Start()
+        $thread.Join()
+    } catch {
+        $reason = $_.Exception.Message
+        Fail-Startup "Failed to create UI thread. $reason"
+    }
 }
+
+Ensure-STAAndRun
