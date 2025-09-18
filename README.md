@@ -45,9 +45,9 @@ or build an executable (after importing the module):
    ```
 2. Install the app with your preferred tool:
    ```bash
-   python3 -m pip install --user '.[tray]'   # or omit [tray] if you do not need the system tray
+   python3 -m pip install --user 'vrchat-join-notification-with-pushover[tray]'   # or omit [tray] if you do not need the system tray
    # alternatively
-   pipx install '.[tray]'
+   pipx install 'vrchat-join-notification-with-pushover[tray]'
    ```
    If your distribution enforces an "externally managed" policy, append `--break-system-packages` or use a virtual environment.
 3. Launch the notifier:
@@ -64,13 +64,13 @@ or build an executable (after importing the module):
    ```
 2. Install the app. `pipx` keeps the CLI on your `$PATH` without touching system Python packages:
    ```bash
-   pipx install '.[tray]'
+   pipx install 'vrchat-join-notification-with-pushover[tray]'
    ```
    Garuda Linux uses the fish shell by default, so make sure `pipx`'s binary directory is exported once:
    ```fish
    set -Ux fish_user_paths $fish_user_paths ~/.local/bin
    ```
-   If you prefer `pip`, use `python -m pip install --user '.[tray]'` and ensure `~/.local/bin` is available in your shell.
+   If you prefer `pip`, use `python -m pip install --user 'vrchat-join-notification-with-pushover[tray]'` and ensure `~/.local/bin` is available in your shell.
 3. Run the notifier from any shell:
    ```bash
    vrchat-join-notifier
@@ -83,9 +83,9 @@ or build an executable (after importing the module):
    ```
 2. Install the app (with tray support when available):
    ```bash
-   python3 -m pip install --user '.[tray]'
+   python3 -m pip install --user 'vrchat-join-notification-with-pushover[tray]'
    # or
-   pipx install '.[tray]'
+   pipx install 'vrchat-join-notification-with-pushover[tray]'
    ```
 3. Launch the notifier:
    ```bash
