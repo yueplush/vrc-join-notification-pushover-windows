@@ -1,108 +1,185 @@
 # VRChat Join Notification with Pushover
 
-A helper for Windows and Linux that watches the latest VRChat log, tells you when you join a world, and announces every new
-player with a toast and (optionally) a Pushover push.
+Cross-platform helper that watches VRChat logs and sends desktop and optional Pushover alerts when friends join. Windows ships as PowerShell; Linux installs as a Python app with a Tk GUI.
 
-## Highlights
-- Follows `output_log_*.txt` / `Player.log` automatically and debounces duplicate join events.
-- Desktop notifications show the placeholder name that VRChat logged so you can spot unresolved display names.
-- Windows ships as a PowerShell script that you can run directly or package as a standalone `.exe`.
-- Linux installs as a Python application with a Tk GUI, system tray support (when available), and optional Pushover integration.
+## Features
+- Tracks the newest `output_log_*.txt` / `Player.log` and follows roll-overs automatically.
+- Emits one world join toast and one per unique player, ignoring the generic "A player joined your instance." message.
+- Debounces duplicates with configurable cooldowns and mirrors behaviour across desktop and push notifications.
+- Linux adds tray support when dependencies exist and can auto-hide on launch; Windows can be run directly or packaged as an `.exe`.
 
-# git clone
-   ```bash/powershell
+## Repository layout
+| Path | Description |
+| --- | --- |
+| `src/vrchat-join-notification-with-pushover.ps1` | Windows PowerShell implementation. |
+| `src/vrchat-join-notification-with-pushover_linux.py` | Legacy shim that calls the packaged Linux app. |
+| `src/vrchat_join_notification/` | Installable Python package with the Linux GUI and notifier logic. |
+
+---
+
+# Getting the source (PowerShell/Bash)
+Clone the repository and enter it:
+
+```powershell/bash
 git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
 cd vrchat-join-notification-with-pushover
-   ```
+```
 
-## Windows quick start
-1. Clone the repository and install the optional packaging tool:
+---
+
+## Windows quick start (PowerShell)
+1. Install the `ps2exe` module if you plan to build a standalone executable:
    ```powershell
-   Install-Module -Name ps2exe -Scope CurrentUser   # only if you want an .exe
-   Import-Module ps2exe                              # load it for this session
+   Install-Module -Name ps2exe -Scope CurrentUser
    ```
-   > **Note**
-   > If `Invoke-ps2exe` says the module could not be loaded, make sure the
-   > `Import-Module ps2exe` command above has completed successfully or start a
-   > new PowerShell session after installing the module.
-2. If you want to test the app, run the script:
+   If you only want to test, run the script directly:
    ```powershell
-   # run directly
    .\src\vrchat-join-notification-with-pushover.ps1
    ```
-or build an executable (after importing the module):
+2. Or build an `.exe`:
    ```powershell
-   # or package
    Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
      -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
    ```
-3. Use **Settings** to pick your VRChat log folder, toggle "Hide window on launch" if you prefer a tray-first start, and add
-   Pushover credentials when you want push alerts.
+3. Configure the install/cache folder, VRChat log directory, and optional Pushover credentials from **Settings**. Toggle “Hide window on launch” if you prefer the tray immediately.
 
-## Linux quick start
+---
 
-### Ubuntu / Debian
-1. Install prerequisites (Python 3.8+, Tk bindings, `libnotify`, and `procps`):
+## Linux quick start (Python package)
+Use the `vrchat-join-notifier` command provided by the installable Python package. The compatibility script simply forwards to it.
+
+### 1. Prerequisites
+Install Python 3.8+, Tk bindings, `libnotify`, and `procps`.
+
+- **Debian/Ubuntu**
+  ```bash
+  sudo apt update
+  sudo apt install python3 python3-venv python3-tk python3-pip libnotify-bin procps
+  ```
+- **Fedora**
+  ```bash
+  sudo dnf install python3 python3-tkinter python3-pip libnotify procps-ng
+  ```
+- **Arch / Manjaro**
+  ```bash
+  sudo pacman -S python python-pip tk libnotify procps-ng
+  ```
+
+Optional tray extras install automatically when the `[tray]` extra is used. A running desktop tray manager is still required.
+
+### 2. Install the package
+Run one of the following in the cloned repository:
+
+```bash
+python3 -m pip install --user .
+# or include the system tray extras
+python3 -m pip install --user '.[tray]'
+```
+
+> Some distributions mark Python as an externally managed environment. Append `--break-system-packages` if needed:
+> ```bash
+> python3 -m pip install --user --break-system-packages '.[tray]'
+> ```
+
+Virtual environments avoid the restriction:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install '.[tray]'
+```
+
+> Fish shell users should activate with:
+> ```bash
+> python3 -m venv .venv
+> source .venv/bin/activate.fish
+> pip install '.[tray]'
+> ```
+
+`pipx` is also supported:
+
+```bash
+pipx install .
+# or, for tray support
+pipx install '.[tray]'
+```
+
+> Uninstall any previous `pip install --user` copy before switching to `pipx` to avoid launcher conflicts.
+
+### 3. Launch the notifier
+Run the command added to your `$PATH`:
+
+```bash
+vrchat-join-notifier
+```
+
+Set the install folder, VRChat log path, and optional Pushover keys in the GUI. **Add to Startup** and **Remove from Startup** manage the autostart entry.
+
+### 4. Start automatically on login (optional)
+The GUI writes `~/.config/autostart/vrchat-join-notifier.desktop`. To manage it manually:
+
+```bash
+mkdir -p ~/.config/autostart
+cat > ~/.config/autostart/vrchat-join-notifier.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=VRChat Join Notification with Pushover
+Comment=Watch VRChat logs and notify when friends join.
+Exec=vrchat-join-notifier
+Terminal=false
+EOF
+```
+
+Point `Exec` to your virtual environment if needed, then log out and back in to test.
+
+---
+
+# Uninstalling on Linux
+Use the tool you installed with:
+
+- **pip / pip install --user**
+  ```bash
+  python3 -m pip uninstall vrchat-join-notification-with-pushover
+  ```
+- **pipx**
+  ```bash
+  pipx uninstall vrchat-join-notification-with-pushover
+  ```
+
+Delete `~/.local/share/vrchat-join-notification-with-pushover` if you want to remove cached data.
+
+---
+
+## Building on Linux
+Builds use `setuptools` and `wheel` via `python3 -m build`.
+
+1. Install build dependencies:
    ```bash
-   sudo apt update
-   sudo apt install python3 python3-venv python3-tk python3-pip libnotify-bin procps
+   python3 -m pip install --upgrade pip
+   python3 -m pip install --upgrade build setuptools wheel
    ```
-2. Install the app with your preferred tool:
+2. Run the build:
    ```bash
-   python3 -m pip install --user 'vrchat-join-notification-with-pushover[tray]'   # or omit [tray] if you do not need the system tray
-   # alternatively
-   pipx install 'vrchat-join-notification-with-pushover[tray]'
+   python3 -m build
    ```
-   If your distribution enforces an "externally managed" policy, append `--break-system-packages` or use a virtual environment.
-3. Launch the notifier:
+3. Inspect the artifacts:
    ```bash
-   vrchat-join-notifier
+   ls -1 dist/
+   # vrchat-join-notification-with-pushover-<version>.tar.gz
+   # vrchat-join-notification-with-pushover-<version>-py3-none-any.whl
+   ```
+4. Test the wheel (optional):
+   ```bash
+   python3 -m venv .venv-test
+   source .venv-test/bin/activate
+   pip install dist/vrchat-join-notification-with-pushover-<version>-py3-none-any.whl
+   vrchat-join-notifier --help
+   deactivate
    ```
 
-### Arch Linux / Garuda Linux
-1. Update and install dependencies:
-   ```bash
-   sudo pacman -Syu
-   sudo pacman -S python python-pip python-virtualenv tk libnotify procps-ng
-   yay -S python-pipx
-   ```
-2. Install the app. `pipx` keeps the CLI on your `$PATH` without touching system Python packages:
-   ```bash
-   pipx install 'vrchat-join-notification-with-pushover[tray]'
-   ```
-   Garuda Linux uses the fish shell by default, so make sure `pipx`'s binary directory is exported once:
-   ```fish
-   set -Ux fish_user_paths $fish_user_paths ~/.local/bin
-   ```
-   If you prefer `pip`, use `python -m pip install --user 'vrchat-join-notification-with-pushover[tray]'` and ensure `~/.local/bin` is available in your shell.
-3. Run the notifier from any shell:
-   ```bash
-   vrchat-join-notifier
-   ```
+Share the contents of `dist/` when you are ready to distribute the package. Installers can add `.[tray]` if they need tray support.
 
-### Fedora
-1. Install prerequisites:
-   ```bash
-   sudo dnf install python3 python3-virtualenv python3-tkinter python3-pip libnotify procps-ng pipx
-   ```
-2. Install the app (with tray support when available):
-   ```bash
-   python3 -m pip install --user 'vrchat-join-notification-with-pushover[tray]'
-   # or
-   pipx install 'vrchat-join-notification-with-pushover[tray]'
-   ```
-3. Launch the notifier:
-   ```bash
-   vrchat-join-notifier
-   ```
-
-The GUI stores its settings under `~/.local/share/vrchat-join-notification-with-pushover`, supports optional autostart, and
-enables the tray icon automatically when `pystray`/`Pillow` and a tray host are present.
-
-## Uninstalling
-- **Windows:** delete the script or packaged executable.
-- **Linux:** uninstall the Python package with `python3 -m pip uninstall vrchat-join-notification-with-pushover` or
-  `pipx uninstall vrchat-join-notification-with-pushover`, then remove the data directory if you no longer need cached logs.
+---
 
 ## Support
-If this project helps you, consider buying me a coffee (JPY): <https://yueplushdev.booth.pm/items/7434788>
+If this project helps you, consider buying me a coffee (JPY): https://yueplushdev.booth.pm/items/7434788
