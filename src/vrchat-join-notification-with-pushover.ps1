@@ -1302,12 +1302,35 @@ function Start-Monitoring {
         [System.Windows.Forms.MessageBox]::Show($message, $AppName, 'OK', 'Error') | Out-Null
         return
     }
-    $script:MonitorTokenSource = New-Object System.Threading.CancellationTokenSource
-    $token = $script:MonitorTokenSource.Token
-    $start = [System.Threading.ParameterizedThreadStart]{ param($ct) Monitor-Loop $ct }
-    $script:MonitorThread = New-Object System.Threading.Thread($start)
-    $script:MonitorThread.IsBackground = $true
-    $script:MonitorThread.Start($token)
+    $tokenSource = $null
+    $thread = $null
+    try {
+        $tokenSource = New-Object System.Threading.CancellationTokenSource
+        $token = $tokenSource.Token
+        $localToken = $token
+        $start = [System.Threading.ThreadStart]{ Monitor-Loop $localToken }
+        $thread = New-Object System.Threading.Thread($start)
+        $thread.IsBackground = $true
+        $thread.Start()
+    } catch {
+        if($thread){
+            try {
+                if($thread.IsAlive){ $thread.Join(1000) | Out-Null }
+            } catch {}
+        }
+        if($tokenSource){
+            try { $tokenSource.Cancel() } catch {}
+            try { $tokenSource.Dispose() } catch {}
+        }
+        $message = "Failed to start monitoring: $($_.Exception.Message)"
+        Write-AppLog $message
+        Set-MonitorStatus 'Stopped'
+        Update-TrayState
+        [System.Windows.Forms.MessageBox]::Show($message, $AppName, 'OK', 'Error') | Out-Null
+        return
+    }
+    $script:MonitorTokenSource = $tokenSource
+    $script:MonitorThread = $thread
     Set-MonitorStatus 'Starting...'
     Write-AppLog 'Monitoring started.'
     Update-TrayState
@@ -1319,6 +1342,9 @@ function Stop-Monitoring {
         if($script:MonitorTokenSource){ $script:MonitorTokenSource.Cancel() }
         if($script:MonitorThread.IsAlive){ $script:MonitorThread.Join(3000) | Out-Null }
     } catch {}
+    if($script:MonitorTokenSource){
+        try { $script:MonitorTokenSource.Dispose() } catch {}
+    }
     $script:MonitorThread = $null
     $script:MonitorTokenSource = $null
     Set-MonitorStatus 'Stopped'
