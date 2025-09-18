@@ -1412,7 +1412,7 @@ function Invoke-HandledAction {
         $message = if([string]::IsNullOrWhiteSpace($Description)){
             "Unexpected error: $reason"
         } else {
-            "Failed to $Description: $reason"
+            "Failed to ${Description}: $reason"
         }
         Write-AppLog $message
         Set-Status $message
