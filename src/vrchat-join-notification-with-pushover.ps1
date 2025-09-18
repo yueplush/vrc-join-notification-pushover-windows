@@ -135,6 +135,7 @@ $script:Controls = @{}
 $script:SingleInstanceMutex = $null
 $script:HasMutexOwnership = $false
 $script:AdditionalMutexes = @()
+$script:PrimaryRunspace = $ExecutionContext.Runspace
 
 # ----------------------------- Helper utils ------------------------------
 function Expand-PathSafe {
@@ -1412,10 +1413,26 @@ function Start-Monitoring {
         $tokenSource = New-Object System.Threading.CancellationTokenSource
         $token = $tokenSource.Token
         $localToken = $token
-        $start = [System.Threading.ThreadStart]{ Monitor-Loop $localToken }
+        $runspace = $script:PrimaryRunspace
+        $start = [System.Threading.ParameterizedThreadStart]{
+            param($state)
+            if($state -and $state.Runspace){
+                try {
+                    [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace = $state.Runspace
+                } catch {}
+            }
+            $workerToken = $null
+            if($state -and $state.Token){
+                $workerToken = $state.Token
+            }
+            if(-not $workerToken){
+                $workerToken = [System.Threading.CancellationToken]::None
+            }
+            Monitor-Loop $workerToken
+        }.GetNewClosure()
         $thread = New-Object System.Threading.Thread($start)
         $thread.IsBackground = $true
-        $thread.Start()
+        $thread.Start([pscustomobject]@{ Token = $localToken; Runspace = $runspace })
     } catch {
         if($thread){
             try {
