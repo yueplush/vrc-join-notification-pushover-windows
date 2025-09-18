@@ -5,6 +5,7 @@ using a Tkinter GUI, libnotify desktop notifications and Pushover pushes.
 """
 from __future__ import annotations
 
+import errno
 import importlib.util
 import json
 import os
@@ -13,6 +14,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -224,6 +226,142 @@ class AppLogger:
             with self._lock:
                 with open(path, "a", encoding="utf-8") as handle:
                     handle.write(line + "\n")
+        except OSError:
+            pass
+
+
+class SingleInstanceGuard:
+    def __init__(self, identifier: str, logger: Optional[AppLogger] = None) -> None:
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", identifier).strip("._") or "app"
+        self._path = os.path.join(tempfile.gettempdir(), f"{safe_name}.lock")
+        self._handle: Optional[Any] = None
+        self._locked = False
+        self._logger = logger
+        self.error: Optional[str] = None
+
+    def acquire(self) -> bool:
+        if self._locked:
+            return True
+        try:
+            os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        except Exception:
+            pass
+        try:
+            self._handle = open(self._path, "a+")
+        except OSError as exc:
+            self.error = f"Failed to open instance guard: {exc}"
+            self._handle = None
+            return False
+        try:
+            if os.name == "nt":
+                self._ensure_minimum_size()
+                import msvcrt  # type: ignore[import-not-found]
+
+                try:
+                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError as exc:
+                    self._handle.close()
+                    self._handle = None
+                    win_code = getattr(exc, "winerror", None)
+                    if exc.errno in {errno.EACCES, errno.EDEADLK} or win_code in {32, 33}:
+                        self.error = f"{APP_NAME} is already running."
+                        if self._logger:
+                            self._logger.log("Instance guard blocked duplicate launch.")
+                    else:
+                        self.error = f"Failed to acquire instance guard: {exc}"
+                        if self._logger:
+                            self._logger.log(f"Instance guard error: {exc}")
+                    return False
+            else:
+                import fcntl  # type: ignore[import-not-found]
+
+                try:
+                    fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    self._handle.close()
+                    self._handle = None
+                    self.error = f"{APP_NAME} is already running."
+                    if self._logger:
+                        self._logger.log("Instance guard blocked duplicate launch.")
+                    return False
+                except OSError as exc:
+                    self._handle.close()
+                    self._handle = None
+                    self.error = f"Failed to acquire instance guard: {exc}"
+                    if self._logger:
+                        self._logger.log(f"Instance guard error: {exc}")
+                    return False
+            if self._handle is None:
+                return False
+            self._handle.seek(0)
+            try:
+                self._handle.truncate()
+            except OSError:
+                pass
+            try:
+                self._handle.write(str(os.getpid()))
+                self._handle.flush()
+            except OSError:
+                pass
+            self._locked = True
+            self.error = None
+            if self._logger:
+                self._logger.log(f"Instance guard active at {self._path}")
+            return True
+        except Exception as exc:  # pragma: no cover - defensive
+            if self._logger:
+                self._logger.log(f"Instance guard unexpected error: {exc}")
+            self.error = f"Failed to acquire instance guard: {exc}"
+            if self._handle is not None:
+                try:
+                    self._handle.close()
+                except Exception:
+                    pass
+                self._handle = None
+            return False
+
+    def release(self) -> None:
+        handle = self._handle
+        self._handle = None
+        was_locked = self._locked
+        self._locked = False
+        if handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt  # type: ignore[import-not-found]
+
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl  # type: ignore[import-not-found]
+
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+        finally:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        if was_locked:
+            try:
+                os.unlink(self._path)
+            except OSError:
+                pass
+
+    def _ensure_minimum_size(self) -> None:
+        if self._handle is None:
+            return
+        try:
+            self._handle.seek(0, os.SEEK_END)
+            if self._handle.tell() == 0:
+                self._handle.write("0")
+                self._handle.flush()
+            self._handle.seek(0)
         except OSError:
             pass
 
@@ -1748,7 +1886,7 @@ class AppController:
         except Exception:
             return False
 
-    def _update_startup_buttons(self) -> None:
+def _update_startup_buttons(self) -> None:
         exists = self._autostart_entry_exists()
         if hasattr(self, "add_startup_button"):
             if exists:
@@ -1762,15 +1900,32 @@ class AppController:
                 self.remove_startup_button.state(["disabled"])
 
 
+def _show_single_instance_dialog(message: str) -> None:
+    dialog_root = tk.Tk()
+    dialog_root.withdraw()
+    try:
+        messagebox.showinfo(APP_NAME, message, parent=dialog_root)
+    finally:
+        dialog_root.destroy()
+
+
 def main() -> None:
     config, load_error = AppConfig.load()
     logger = AppLogger(config)
-    root = tk.Tk()
-    controller = AppController(root, config, logger, load_error)
-    if load_error:
-        messagebox.showerror(APP_NAME, load_error)
-        controller.status_var.set(load_error)
-    root.mainloop()
+    guard = SingleInstanceGuard(APP_NAME, logger)
+    if not guard.acquire():
+        message = guard.error or f"{APP_NAME} is already running."
+        _show_single_instance_dialog(message)
+        return
+    try:
+        root = tk.Tk()
+        controller = AppController(root, config, logger, load_error)
+        if load_error:
+            messagebox.showerror(APP_NAME, load_error)
+            controller.status_var.set(load_error)
+        root.mainloop()
+    finally:
+        guard.release()
 
 
 if __name__ == "__main__":
