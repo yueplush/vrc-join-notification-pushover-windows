@@ -50,6 +50,7 @@ cd vrchat-join-notification-with-pushover
    ```
 3. Open **Settings** from the tray icon (or via the window) to configure the install/cache folder, VRChat log directory, and optional Pushover credentials.
    The WinForms UI now mirrors the Linux layout with live **Status**, **Monitoring**, **Current Log**, **Session**, and **Last Event** indicators so you can see exactly what the watcher is doing.
+   The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops) and wraps long status text automatically, and the action buttons inherit the slimmer spacing used by the Linux port for a consistent look.
 
 > [!NOTE]
 > The rewritten Windows script uses the same parsing and session logic as the Linux edition, including Unicode-safe string handling. All non-ASCII characters (Japanese log phrases, dash variants, etc.) are emitted explicitly so Windows PowerShell 5.1 and `ps2exe` builds remain reliable on localized systems.

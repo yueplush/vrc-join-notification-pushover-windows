@@ -1002,6 +1002,7 @@ function Set-Status {
     Param([string]$Text)
     if($script:Controls.Status){
         $script:Controls.Status.Text = $Text
+        Update-StatusLabelWidths
     }
 }
 
@@ -1009,12 +1010,14 @@ function Set-MonitorStatus {
     Param([string]$Text)
     if($script:Controls.MonitorStatus){
         $script:Controls.MonitorStatus.Text = $Text
+        Update-StatusLabelWidths
     }
 }
 
 function Set-SessionLabel {
     if($script:Controls.Session){
         $script:Controls.Session.Text = Get-SessionDescription
+        Update-StatusLabelWidths
     }
 }
 
@@ -1022,6 +1025,7 @@ function Set-LastEvent {
     Param([string]$Text)
     if($script:Controls.LastEvent){
         $script:Controls.LastEvent.Text = $Text
+        Update-StatusLabelWidths
     }
 }
 
@@ -1029,6 +1033,7 @@ function Set-CurrentLog {
     Param([string]$Path)
     if($script:Controls.CurrentLog){
         $script:Controls.CurrentLog.Text = if($Path){ $Path } else { '(none)' }
+        Update-StatusLabelWidths
     }
 }
 
@@ -1269,13 +1274,47 @@ function Hide-Window {
         Set-Status 'Settings window hidden. Use the tray icon to reopen or quit.'
     }
 }
+
+function Update-StatusLabelWidths {
+    if(-not $script:Controls.Form){ return }
+    $labels = $script:Controls.StatusLabels
+    if(-not $labels){ return }
+
+    $available = $null
+    if($script:Controls.StatusTable){
+        try {
+            $columnWidths = $script:Controls.StatusTable.GetColumnWidths()
+            if($columnWidths.Length -gt 1){
+                $available = $columnWidths[1] - 6
+            }
+        } catch {}
+    }
+
+    if(-not $available -or $available -lt 120){
+        $form = $script:Controls.Form
+        $layoutPadding = 0
+        if($script:Controls.Layout){
+            $layoutPadding = $script:Controls.Layout.Padding.Left + $script:Controls.Layout.Padding.Right
+        }
+        $available = [Math]::Max(120, $form.ClientSize.Width - $layoutPadding - 180)
+    }
+
+    foreach($label in $labels){
+        if($label){
+            $label.MaximumSize = New-Object System.Drawing.Size($available, 0)
+        }
+    }
+}
+
 function Build-UI {
     Param([pscustomobject]$Config)
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$AppName (Windows)"
     $form.StartPosition = 'CenterScreen'
-    $form.Size = New-Object System.Drawing.Size(780, 520)
-    $form.MinimumSize = New-Object System.Drawing.Size(680, 480)
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Font
+    $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
+    $form.ClientSize = New-Object System.Drawing.Size(720, 480)
+    $form.MinimumSize = New-Object System.Drawing.Size(640, 460)
 
     $layout = New-Object System.Windows.Forms.TableLayoutPanel
     $layout.Dock = 'Fill'
@@ -1286,6 +1325,10 @@ function Build-UI {
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    foreach($i in 0..4){
+        [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    }
+    [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 
     $labelInstall = New-Object System.Windows.Forms.Label
     $labelInstall.Text = 'Install Folder (logs/cache):'
@@ -1374,29 +1417,38 @@ function Build-UI {
     $buttonPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $buttonPanel.ColumnCount = 4
     $buttonPanel.Dock = 'Top'
+    $buttonPanel.AutoSize = $true
+    $buttonPanel.AutoSizeMode = 'GrowAndShrink'
+    $buttonPanel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $buttonPanel.RowCount = 1
+    [void]$buttonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     foreach($i in 0..3){ [void]$buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
 
     $saveRestart = New-Object System.Windows.Forms.Button
     $saveRestart.Text = 'Save && Restart Monitoring'
     $saveRestart.Dock = 'Fill'
+    $saveRestart.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $buttonPanel.Controls.Add($saveRestart, 0, 0)
     $saveRestart.Add_Click({ Save-And-Restart })
 
     $startBtn = New-Object System.Windows.Forms.Button
     $startBtn.Text = 'Start Monitoring'
     $startBtn.Dock = 'Fill'
+    $startBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $buttonPanel.Controls.Add($startBtn, 1, 0)
     $startBtn.Add_Click({ Start-Monitoring })
 
     $stopBtn = New-Object System.Windows.Forms.Button
     $stopBtn.Text = 'Stop Monitoring'
     $stopBtn.Dock = 'Fill'
+    $stopBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $buttonPanel.Controls.Add($stopBtn, 2, 0)
     $stopBtn.Add_Click({ Stop-Monitoring })
 
     $quitBtn = New-Object System.Windows.Forms.Button
     $quitBtn.Text = 'Quit'
     $quitBtn.Dock = 'Fill'
+    $quitBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $buttonPanel.Controls.Add($quitBtn, 3, 0)
     $quitBtn.Add_Click({ Quit-App })
 
@@ -1406,23 +1458,31 @@ function Build-UI {
     $extraPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $extraPanel.ColumnCount = 4
     $extraPanel.Dock = 'Top'
+    $extraPanel.AutoSize = $true
+    $extraPanel.AutoSizeMode = 'GrowAndShrink'
+    $extraPanel.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+    $extraPanel.RowCount = 1
+    [void]$extraPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     foreach($i in 0..3){ [void]$extraPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
 
     $addStartup = New-Object System.Windows.Forms.Button
     $addStartup.Text = 'Add to Startup'
     $addStartup.Dock = 'Fill'
+    $addStartup.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $extraPanel.Controls.Add($addStartup, 0, 0)
     $addStartup.Add_Click({ Add-ToStartup })
 
     $removeStartup = New-Object System.Windows.Forms.Button
     $removeStartup.Text = 'Remove from Startup'
     $removeStartup.Dock = 'Fill'
+    $removeStartup.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $extraPanel.Controls.Add($removeStartup, 1, 0)
     $removeStartup.Add_Click({ Remove-FromStartup })
 
     $saveBtn = New-Object System.Windows.Forms.Button
     $saveBtn.Text = 'Save'
     $saveBtn.Dock = 'Fill'
+    $saveBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $extraPanel.Controls.Add($saveBtn, 2, 0)
     $saveBtn.Add_Click({ Save-Only })
 
@@ -1478,6 +1538,8 @@ function Build-UI {
     $form.Add_Resize({
         if($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized -and -not $script:IsQuitting){
             Hide-Window
+        } else {
+            Update-StatusLabelWidths
         }
     })
 
@@ -1494,7 +1556,14 @@ function Build-UI {
         LastEvent     = $lastEventValue
         AddStartup    = $addStartup
         RemoveStartup = $removeStartup
+        Layout        = $layout
+        StatusTable   = $statusTable
+        StatusLabels  = @($statusValue, $monitorValue, $currentLogValue, $sessionValue, $lastEventValue)
     }
+
+    Update-StatusLabelWidths
+
+    $form.Add_Shown({ Update-StatusLabelWidths })
 
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 200
