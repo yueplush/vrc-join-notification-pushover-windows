@@ -1359,7 +1359,11 @@ function Update-StatusLabelWidths {
         if($script:Controls.Layout){
             $layoutPadding = $script:Controls.Layout.Padding.Left + $script:Controls.Layout.Padding.Right
         }
-        $available = [Math]::Max(120, $form.ClientSize.Width - $layoutPadding - 180)
+        $groupPadding = 0
+        if($script:Controls.StatusGroup){
+            $groupPadding = $script:Controls.StatusGroup.Padding.Left + $script:Controls.StatusGroup.Padding.Right
+        }
+        $available = [Math]::Max(120, $form.ClientSize.Width - $layoutPadding - $groupPadding - 180)
     }
 
     foreach($label in $labels){
@@ -1376,13 +1380,12 @@ function Build-UI {
     $form.StartPosition = 'CenterScreen'
     $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Font
     $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
-    $form.ClientSize = New-Object System.Drawing.Size(660, 420)
-    $form.MinimumSize = New-Object System.Drawing.Size(620, 400)
+    $form.ClientSize = New-Object System.Drawing.Size(620, 320)
 
     $layout = New-Object System.Windows.Forms.TableLayoutPanel
     $layout.Dock = 'Fill'
     $layout.Margin = New-Object System.Windows.Forms.Padding(0)
-    $layout.Padding = New-Object System.Windows.Forms.Padding(10, 10, 10, 8)
+    $layout.Padding = New-Object System.Windows.Forms.Padding(12, 12, 12, 10)
     $layout.ColumnCount = 4
     $layout.RowCount = 6
     [void]$layout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
@@ -1397,20 +1400,20 @@ function Build-UI {
     $labelInstall = New-Object System.Windows.Forms.Label
     $labelInstall.Text = 'Install Folder (logs/cache):'
     $labelInstall.AutoSize = $true
-    $labelInstall.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 4)
+    $labelInstall.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 2)
     $layout.Controls.Add($labelInstall, 0, 0)
 
     $installBox = New-Object System.Windows.Forms.TextBox
     $installBox.Text = $Config.InstallDir
     $installBox.Dock = 'Fill'
-    $installBox.Margin = New-Object System.Windows.Forms.Padding(0, 0, 3, 4)
+    $installBox.Margin = New-Object System.Windows.Forms.Padding(0, 0, 4, 2)
     $layout.Controls.Add($installBox, 1, 0)
     [void]$layout.SetColumnSpan($installBox, 2)
 
     $browseInstall = New-Object System.Windows.Forms.Button
     $browseInstall.Text = 'Browse…'
     $browseInstall.AutoSize = $true
-    $browseInstall.Margin = New-Object System.Windows.Forms.Padding(3, 0, 0, 4)
+    $browseInstall.Margin = New-Object System.Windows.Forms.Padding(4, 0, 0, 2)
     $layout.Controls.Add($browseInstall, 3, 0)
     $browseInstall.Add_Click({
         $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -1423,20 +1426,20 @@ function Build-UI {
     $labelLog = New-Object System.Windows.Forms.Label
     $labelLog.Text = 'VRChat Log Folder:'
     $labelLog.AutoSize = $true
-    $labelLog.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 4)
+    $labelLog.Margin = New-Object System.Windows.Forms.Padding(0, 6, 8, 2)
     $layout.Controls.Add($labelLog, 0, 1)
 
     $logBox = New-Object System.Windows.Forms.TextBox
     $logBox.Text = $Config.VRChatLogDir
     $logBox.Dock = 'Fill'
-    $logBox.Margin = New-Object System.Windows.Forms.Padding(0, 0, 3, 4)
+    $logBox.Margin = New-Object System.Windows.Forms.Padding(0, 0, 4, 2)
     $layout.Controls.Add($logBox, 1, 1)
     [void]$layout.SetColumnSpan($logBox, 2)
 
     $browseLog = New-Object System.Windows.Forms.Button
     $browseLog.Text = 'Browse…'
     $browseLog.AutoSize = $true
-    $browseLog.Margin = New-Object System.Windows.Forms.Padding(3, 0, 0, 4)
+    $browseLog.Margin = New-Object System.Windows.Forms.Padding(4, 0, 0, 2)
     $layout.Controls.Add($browseLog, 3, 1)
     $browseLog.Add_Click({
         $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -1449,13 +1452,13 @@ function Build-UI {
     $labelPO = New-Object System.Windows.Forms.Label
     $labelPO.Text = 'Pushover Credentials:'
     $labelPO.AutoSize = $true
-    $labelPO.Margin = New-Object System.Windows.Forms.Padding(0, 4, 6, 2)
+    $labelPO.Margin = New-Object System.Windows.Forms.Padding(0, 10, 8, 2)
     $layout.Controls.Add($labelPO, 0, 2)
 
     $poPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $poPanel.ColumnCount = 4
     $poPanel.Dock = 'Fill'
-    $poPanel.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 4)
+    $poPanel.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 2)
     [void]$poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
     [void]$poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
     [void]$poPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
@@ -1471,13 +1474,13 @@ function Build-UI {
     $poUserBox.Text = $Config.PushoverUser
     $poUserBox.UseSystemPasswordChar = $true
     $poUserBox.Dock = 'Fill'
-    $poUserBox.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
+    $poUserBox.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
     $poPanel.Controls.Add($poUserBox, 1, 0)
 
     $poTokenLabel = New-Object System.Windows.Forms.Label
     $poTokenLabel.Text = 'API Token:'
     $poTokenLabel.AutoSize = $true
-    $poTokenLabel.Margin = New-Object System.Windows.Forms.Padding(6, 0, 6, 0)
+    $poTokenLabel.Margin = New-Object System.Windows.Forms.Padding(8, 0, 6, 0)
     $poPanel.Controls.Add($poTokenLabel, 2, 0)
 
     $poTokenBox = New-Object System.Windows.Forms.TextBox
@@ -1492,10 +1495,10 @@ function Build-UI {
 
     $buttonPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $buttonPanel.ColumnCount = 3
-    $buttonPanel.Dock = 'Top'
+    $buttonPanel.Dock = 'Fill'
     $buttonPanel.AutoSize = $true
     $buttonPanel.AutoSizeMode = 'GrowAndShrink'
-    $buttonPanel.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+    $buttonPanel.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 0)
     $buttonPanel.Padding = New-Object System.Windows.Forms.Padding(0)
     $buttonPanel.RowCount = 1
     [void]$buttonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
@@ -1527,10 +1530,10 @@ function Build-UI {
 
     $extraPanel = New-Object System.Windows.Forms.TableLayoutPanel
     $extraPanel.ColumnCount = 4
-    $extraPanel.Dock = 'Top'
+    $extraPanel.Dock = 'Fill'
     $extraPanel.AutoSize = $true
     $extraPanel.AutoSizeMode = 'GrowAndShrink'
-    $extraPanel.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+    $extraPanel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
     $extraPanel.RowCount = 1
     [void]$extraPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     foreach($i in 0..3){ [void]$extraPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
@@ -1569,8 +1572,8 @@ function Build-UI {
     $statusGroup = New-Object System.Windows.Forms.GroupBox
     $statusGroup.Text = 'Status'
     $statusGroup.Dock = 'Fill'
-    $statusGroup.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
-    $statusGroup.Padding = New-Object System.Windows.Forms.Padding(10, 12, 10, 8)
+    $statusGroup.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 0)
+    $statusGroup.Padding = New-Object System.Windows.Forms.Padding(10, 10, 10, 10)
 
     $statusTable = New-Object System.Windows.Forms.TableLayoutPanel
     $statusTable.Dock = 'Fill'
@@ -1578,7 +1581,7 @@ function Build-UI {
     $statusTable.AutoSize = $true
     $statusTable.AutoSizeMode = 'GrowAndShrink'
     $statusTable.Margin = New-Object System.Windows.Forms.Padding(0)
-    $statusTable.Padding = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
+    $statusTable.Padding = New-Object System.Windows.Forms.Padding(0)
     [void]$statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
     [void]$statusTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 
@@ -1590,13 +1593,13 @@ function Build-UI {
         $label = New-Object System.Windows.Forms.Label
         $label.Text = $LabelText
         $label.AutoSize = $true
-        $label.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 2)
+        $label.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 3)
         $Table.Controls.Add($label, 0, $row)
         $value = New-Object System.Windows.Forms.Label
         $value.Text = ''
         $value.AutoSize = $true
-        $value.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
-        $value.MaximumSize = New-Object System.Drawing.Size(500, 0)
+        $value.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 3)
+        $value.MaximumSize = New-Object System.Drawing.Size(520, 0)
         $Table.Controls.Add($value, 1, $row)
         return $value
     }
@@ -1612,6 +1615,16 @@ function Build-UI {
     [void]$layout.SetColumnSpan($statusGroup, 4)
 
     $form.Controls.Add($layout)
+    $form.PerformLayout()
+
+    $preferred = $layout.GetPreferredSize((New-Object System.Drawing.Size(0, 0)))
+    if(-not $preferred.Width -or -not $preferred.Height){
+        $preferred = $layout.PreferredSize
+    }
+    $initialWidth = [Math]::Max(620, $preferred.Width)
+    $initialHeight = [Math]::Max(320, $preferred.Height)
+    $form.ClientSize = New-Object System.Drawing.Size($initialWidth, $initialHeight)
+    $form.MinimumSize = $form.Size
 
     $form.Add_FormClosing({ param($sender,$e)
         if(-not $script:IsQuitting){
@@ -1642,6 +1655,7 @@ function Build-UI {
         AddStartup    = $addStartup
         RemoveStartup = $removeStartup
         Layout        = $layout
+        StatusGroup   = $statusGroup
         StatusTable   = $statusTable
         StatusLabels  = @($statusValue, $monitorValue, $currentLogValue, $sessionValue, $lastEventValue)
     }
