@@ -9,6 +9,7 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 - Silently ignores the redundant generic desktop toast (`A player joined your instance.`) so only the richer, name-aware notification remains on Windows and Linux.
 - Debounces duplicate events with configurable cooldowns.
 - Optional Pushover integration in addition to local desktop notifications.
+- A dedicated “Hide window on launch” toggle lets you decide whether the window stays visible or drops straight to the tray after monitoring starts, eliminating the confusing auto-hide crash lookalike.
 - Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing). The Windows window now matches the Linux layout, including the live status fields and compact spacing.
 - Windows builds guard against multiple launches and continue to raise desktop notifications (even when packaged as a `.exe`) by dispatching them through the UI thread.
 - Native Windows builds now register an AppUserModelID and Start Menu shortcut automatically so Action Center toasts (with the system chime) accompany the tray balloon on supported versions of Windows.
@@ -54,7 +55,7 @@ cd vrchat-join-notification-with-pushover
    `vrchat_join_notification` subfolder variants), so keep the icon alongside the `.exe` when redistributing a packaged copy.
 3. Open **Settings** from the tray icon (or via the window) to configure the install/cache folder, VRChat log directory, and optional Pushover credentials.
    The WinForms UI now mirrors the Linux layout with live **Status**, **Monitoring**, **Current Log**, **Session**, and **Last Event** indicators so you can see exactly what the watcher is doing.
-   The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops), trims the extra padding around each field, and wraps long status text automatically, while the action buttons inherit the slimmer spacing used by the Linux port for a consistent look—the blank band that previously separated the middle controls is gone.
+   The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops), trims the extra padding around each field, and wraps long status text automatically, while the action buttons inherit the slimmer spacing used by the Linux port for a consistent look—the blank band that previously separated the middle controls is gone. A new checkbox controls whether the window should automatically hide to the tray on launch once Pushover credentials are present.
    Clicking **Start Monitoring** now launches the background follower without tripping the `ParameterizedThreadStart` constructor error on Windows PowerShell 5.1 builds.
    Launching the packaged `.exe` while another copy is running now surfaces an informational dialog instead of starting a duplicate instance, and desktop notifications are marshalled onto the UI thread so Windows toasts fire reliably again.
 
