@@ -21,9 +21,9 @@ if(-not ('NativeMethods.AppUserModel' -as [type])){
 using System;
 using System.Runtime.InteropServices;
 namespace NativeMethods {
-    internal static class AppUserModel {
+    public static class AppUserModel {
         [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        internal static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
+        public static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
     }
 }
 "@
