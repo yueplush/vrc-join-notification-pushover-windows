@@ -1396,6 +1396,32 @@ function Process-Events {
     }
 }
 
+function Invoke-HandledAction {
+    Param(
+        [Parameter(Mandatory=$true)][scriptblock]$Action,
+        [string]$Description = $null,
+        [switch]$NotifyOnFailure
+    )
+    $result = [pscustomobject]@{ Succeeded = $false; Result = $null }
+    if(-not $Action){ return $result }
+    try {
+        $value = & $Action
+        return [pscustomobject]@{ Succeeded = $true; Result = $value }
+    } catch {
+        $reason = $_.Exception.Message
+        $message = if([string]::IsNullOrWhiteSpace($Description)){
+            "Unexpected error: $reason"
+        } else {
+            "Failed to $Description: $reason"
+        }
+        Write-AppLog $message
+        Set-Status $message
+        if($NotifyOnFailure){ Send-PushoverNotification $AppName $message }
+        try { [System.Windows.Forms.MessageBox]::Show($message, $AppName, 'OK', 'Error') | Out-Null } catch {}
+        return [pscustomobject]@{ Succeeded = $false; Result = $null; Message = $message }
+    }
+}
+
 function Update-ConfigFromForm {
     if(-not $script:Controls){ return }
     if($script:Controls.Install){ $script:Config.InstallDir = Expand-PathSafe $script:Controls.Install.Text }
@@ -1405,7 +1431,7 @@ function Update-ConfigFromForm {
     if($script:Controls.AutoHide){ $script:Config.AutoHideOnLaunch = [bool]$script:Controls.AutoHide.Checked }
 }
 function Start-Monitoring {
-    if($script:MonitorThread -and $script:MonitorThread.IsAlive){ return }
+    if($script:MonitorThread -and $script:MonitorThread.IsAlive){ return $true }
     Update-ConfigFromForm
     try {
         Ensure-Dir $script:Config.InstallDir
@@ -1413,7 +1439,7 @@ function Start-Monitoring {
         $message = "Failed to prepare install folder '$($script:Config.InstallDir)': $($_.Exception.Message)"
         Write-AppLog $message
         [System.Windows.Forms.MessageBox]::Show($message, $AppName, 'OK', 'Error') | Out-Null
-        return
+        return $false
     }
     $tokenSource = $null
     $thread = $null
@@ -1454,17 +1480,18 @@ function Start-Monitoring {
         Set-MonitorStatus 'Stopped'
         Update-TrayState
         [System.Windows.Forms.MessageBox]::Show($message, $AppName, 'OK', 'Error') | Out-Null
-        return
+        return $false
     }
     $script:MonitorTokenSource = $tokenSource
     $script:MonitorThread = $thread
     Set-MonitorStatus 'Starting...'
     Write-AppLog 'Monitoring started.'
     Update-TrayState
+    return $true
 }
 
 function Stop-Monitoring {
-    if(-not $script:MonitorThread){ return }
+    if(-not $script:MonitorThread){ return $null }
     try {
         if($script:MonitorTokenSource){ $script:MonitorTokenSource.Cancel() }
         if($script:MonitorThread.IsAlive){ $script:MonitorThread.Join(3000) | Out-Null }
@@ -1477,11 +1504,12 @@ function Stop-Monitoring {
     Set-MonitorStatus 'Stopped'
     Update-TrayState
     Write-AppLog 'Monitoring stopped.'
+    return $true
 }
 
 function Restart-Monitoring {
-    Stop-Monitoring
-    Start-Monitoring
+    Stop-Monitoring | Out-Null
+    return (Start-Monitoring)
 }
 
 function Get-LauncherPath {
@@ -1614,6 +1642,7 @@ function Update-StartupButtons {
 }
 
 function Add-ToStartup {
+    $success = $false
     try {
         $shortcutPath = Get-StartupShortcutPath
         $shell = New-Object -ComObject WScript.Shell
@@ -1626,6 +1655,7 @@ function Add-ToStartup {
         Set-Status 'Added to startup.'
         Write-AppLog "Startup entry created at $shortcutPath"
         Send-DesktopNotification $AppName 'Added to Windows startup.'
+        $success = $true
     } catch {
         $msg = "Failed to add to startup: $($_.Exception.Message)"
         Set-Status $msg
@@ -1634,15 +1664,18 @@ function Add-ToStartup {
     } finally {
         Update-StartupButtons
     }
+    return $success
 }
 
 function Remove-FromStartup {
+    $success = $false
     try {
         $shortcutPath = Get-StartupShortcutPath
         if(Test-Path $shortcutPath){ Remove-Item $shortcutPath -Force }
         Set-Status 'Removed from startup.'
         Write-AppLog "Startup entry removed from $shortcutPath"
         Send-DesktopNotification $AppName 'Removed from Windows startup.'
+        $success = $true
     } catch {
         $msg = "Failed to remove from startup: $($_.Exception.Message)"
         Set-Status $msg
@@ -1651,6 +1684,7 @@ function Remove-FromStartup {
     } finally {
         Update-StartupButtons
     }
+    return $success
 }
 
 function Save-Only {
@@ -1670,11 +1704,14 @@ function Save-And-Restart {
         Update-ConfigFromForm
         Save-AppConfig $script:Config
         Set-Status 'Settings saved. Restarting monitor...'
-        Restart-Monitoring
+        $restartResult = Restart-Monitoring
+        if($restartResult -eq $false){ return $false }
+        return $true
     } catch {
         $msg = "Failed to save settings: $($_.Exception.Message)"
         Set-Status $msg
         Write-AppLog $msg
+        return $false
     }
 }
 
@@ -1887,21 +1924,49 @@ function Build-UI {
     $startBtn.Dock = 'Fill'
     $startBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $buttonPanel.Controls.Add($startBtn, 0, 0)
-    $startBtn.Add_Click({ Start-Monitoring })
+    $startBtn.Add_Click({
+        $wasRunning = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
+        $result = Invoke-HandledAction -Action { Start-Monitoring } -Description 'start monitoring' -NotifyOnFailure
+        if(-not $result.Succeeded){ return }
+        if($result.Result -eq $false){ return }
+        $isRunning = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
+        if(-not $wasRunning -and $isRunning){
+            Send-PushoverNotification $AppName 'Monitoring started from Settings.'
+        }
+    })
 
     $stopBtn = New-Object System.Windows.Forms.Button
     $stopBtn.Text = 'Stop Monitoring'
     $stopBtn.Dock = 'Fill'
     $stopBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $buttonPanel.Controls.Add($stopBtn, 1, 0)
-    $stopBtn.Add_Click({ Stop-Monitoring })
+    $stopBtn.Add_Click({
+        $wasRunning = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
+        $result = Invoke-HandledAction -Action { Stop-Monitoring } -Description 'stop monitoring' -NotifyOnFailure
+        if(-not $result.Succeeded){ return }
+        if($result.Result -eq $false){ return }
+        $isRunning = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
+        if($wasRunning -and -not $isRunning){
+            Send-PushoverNotification $AppName 'Monitoring stopped from Settings.'
+        }
+    })
 
     $saveRestart = New-Object System.Windows.Forms.Button
     $saveRestart.Text = 'Save && Restart Monitoring'
     $saveRestart.Dock = 'Fill'
     $saveRestart.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $buttonPanel.Controls.Add($saveRestart, 2, 0)
-    $saveRestart.Add_Click({ Save-And-Restart })
+    $saveRestart.Add_Click({
+        $wasRunning = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
+        $result = Invoke-HandledAction -Action { Save-And-Restart } -Description 'save settings and restart monitoring' -NotifyOnFailure
+        if(-not $result.Succeeded){ return }
+        if($result.Result -eq $false){ return }
+        $isRunning = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
+        if($isRunning){
+            $message = if($wasRunning){ 'Settings saved and monitoring restarted from Settings.' } else { 'Settings saved and monitoring started from Settings.' }
+            Send-PushoverNotification $AppName $message
+        }
+    })
 
     $layout.Controls.Add($buttonPanel, 0, 4)
     [void]$layout.SetColumnSpan($buttonPanel, 4)
@@ -1921,14 +1986,32 @@ function Build-UI {
     $addStartup.Dock = 'Fill'
     $addStartup.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $extraPanel.Controls.Add($addStartup, 0, 0)
-    $addStartup.Add_Click({ Add-ToStartup })
+    $addStartup.Add_Click({
+        $hadEntry = Test-Path (Get-StartupShortcutPath)
+        $result = Invoke-HandledAction -Action { Add-ToStartup } -Description 'add to startup' -NotifyOnFailure
+        if(-not $result.Succeeded){ return }
+        if($result.Result -eq $false){ return }
+        $hasEntry = Test-Path (Get-StartupShortcutPath)
+        if(-not $hadEntry -and $hasEntry){
+            Send-PushoverNotification $AppName 'Added to Windows startup from Settings.'
+        }
+    })
 
     $removeStartup = New-Object System.Windows.Forms.Button
     $removeStartup.Text = 'Remove from Startup'
     $removeStartup.Dock = 'Fill'
     $removeStartup.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $extraPanel.Controls.Add($removeStartup, 1, 0)
-    $removeStartup.Add_Click({ Remove-FromStartup })
+    $removeStartup.Add_Click({
+        $hadEntry = Test-Path (Get-StartupShortcutPath)
+        $result = Invoke-HandledAction -Action { Remove-FromStartup } -Description 'remove from startup' -NotifyOnFailure
+        if(-not $result.Succeeded){ return }
+        if($result.Result -eq $false){ return }
+        $hasEntry = Test-Path (Get-StartupShortcutPath)
+        if($hadEntry -and -not $hasEntry){
+            Send-PushoverNotification $AppName 'Removed from Windows startup from Settings.'
+        }
+    })
 
     $saveBtn = New-Object System.Windows.Forms.Button
     $saveBtn.Text = 'Save'
@@ -2063,11 +2146,11 @@ function Build-Tray {
     $openItem.Add_Click({ Show-Window })
     $menu.Items.Add('-') | Out-Null
     $startItem = $menu.Items.Add('Start Monitoring')
-    $startItem.Add_Click({ Start-Monitoring })
+    $startItem.Add_Click({ Invoke-HandledAction -Action { Start-Monitoring } -Description 'start monitoring' | Out-Null })
     $stopItem = $menu.Items.Add('Stop Monitoring')
-    $stopItem.Add_Click({ Stop-Monitoring })
+    $stopItem.Add_Click({ Invoke-HandledAction -Action { Stop-Monitoring } -Description 'stop monitoring' | Out-Null })
     $restartItem = $menu.Items.Add('Save && Restart Monitoring')
-    $restartItem.Add_Click({ Save-And-Restart })
+    $restartItem.Add_Click({ Invoke-HandledAction -Action { Save-And-Restart } -Description 'save settings and restart monitoring' | Out-Null })
     $menu.Items.Add('-') | Out-Null
     $quitItem = $menu.Items.Add('Quit')
     $quitItem.Add_Click({ Quit-App })
