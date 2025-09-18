@@ -29,12 +29,14 @@ player with a toast and (optionally) a Pushover push.
    Pushover credentials when you want push alerts.
 
 ## Linux quick start
-1. Install prerequisites (Python 3.8+, Tk bindings, `libnotify`, and `procps`). On Debian/Ubuntu:
+
+### Ubuntu / Debian
+1. Install prerequisites (Python 3.8+, Tk bindings, `libnotify`, and `procps`):
    ```bash
    sudo apt update
    sudo apt install python3 python3-venv python3-tk python3-pip libnotify-bin procps
    ```
-2. Install the app. Use whichever tool you prefer:
+2. Install the app with your preferred tool:
    ```bash
    python3 -m pip install --user '.[tray]'   # or omit [tray] if you do not need the system tray
    # alternatively
@@ -45,8 +47,45 @@ player with a toast and (optionally) a Pushover push.
    ```bash
    vrchat-join-notifier
    ```
-   The GUI stores its settings under `~/.local/share/vrchat-join-notification-with-pushover`, supports optional autostart, and
-   enables the tray icon automatically when `pystray`/`Pillow` and a tray host are present.
+
+### Arch Linux / Garuda Linux
+1. Update and install dependencies:
+   ```bash
+   sudo pacman -Syu
+   sudo pacman -S python python-pip python-virtualenv tk libnotify procps-ng pipx
+   ```
+2. Install the app. `pipx` keeps the CLI on your `$PATH` without touching system Python packages:
+   ```bash
+   pipx install '.[tray]'
+   ```
+   Garuda Linux uses the fish shell by default, so make sure `pipx`'s binary directory is exported once:
+   ```fish
+   set -Ux fish_user_paths $fish_user_paths ~/.local/bin
+   ```
+   If you prefer `pip`, use `python -m pip install --user '.[tray]'` and ensure `~/.local/bin` is available in your shell.
+3. Run the notifier from any shell:
+   ```bash
+   vrchat-join-notifier
+   ```
+
+### Fedora
+1. Install prerequisites:
+   ```bash
+   sudo dnf install python3 python3-virtualenv python3-tkinter python3-pip libnotify procps-ng pipx
+   ```
+2. Install the app (with tray support when available):
+   ```bash
+   python3 -m pip install --user '.[tray]'
+   # or
+   pipx install '.[tray]'
+   ```
+3. Launch the notifier:
+   ```bash
+   vrchat-join-notifier
+   ```
+
+The GUI stores its settings under `~/.local/share/vrchat-join-notification-with-pushover`, supports optional autostart, and
+enables the tray icon automatically when `pystray`/`Pillow` and a tray host are present.
 
 ## Uninstalling
 - **Windows:** delete the script or packaged executable.
