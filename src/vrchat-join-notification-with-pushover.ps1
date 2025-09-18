@@ -1491,7 +1491,7 @@ function Build-UI {
     [void]$layout.SetColumnSpan($poPanel, 3)
 
     $buttonPanel = New-Object System.Windows.Forms.TableLayoutPanel
-    $buttonPanel.ColumnCount = 4
+    $buttonPanel.ColumnCount = 3
     $buttonPanel.Dock = 'Top'
     $buttonPanel.AutoSize = $true
     $buttonPanel.AutoSizeMode = 'GrowAndShrink'
@@ -1499,35 +1499,28 @@ function Build-UI {
     $buttonPanel.Padding = New-Object System.Windows.Forms.Padding(0)
     $buttonPanel.RowCount = 1
     [void]$buttonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    foreach($i in 0..3){ [void]$buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
-
-    $saveRestart = New-Object System.Windows.Forms.Button
-    $saveRestart.Text = 'Save && Restart Monitoring'
-    $saveRestart.Dock = 'Fill'
-    $saveRestart.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
-    $buttonPanel.Controls.Add($saveRestart, 0, 0)
-    $saveRestart.Add_Click({ Save-And-Restart })
+    foreach($i in 0..2){ [void]$buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 33.3333))) }
 
     $startBtn = New-Object System.Windows.Forms.Button
     $startBtn.Text = 'Start Monitoring'
     $startBtn.Dock = 'Fill'
     $startBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
-    $buttonPanel.Controls.Add($startBtn, 1, 0)
+    $buttonPanel.Controls.Add($startBtn, 0, 0)
     $startBtn.Add_Click({ Start-Monitoring })
 
     $stopBtn = New-Object System.Windows.Forms.Button
     $stopBtn.Text = 'Stop Monitoring'
     $stopBtn.Dock = 'Fill'
     $stopBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
-    $buttonPanel.Controls.Add($stopBtn, 2, 0)
+    $buttonPanel.Controls.Add($stopBtn, 1, 0)
     $stopBtn.Add_Click({ Stop-Monitoring })
 
-    $quitBtn = New-Object System.Windows.Forms.Button
-    $quitBtn.Text = 'Quit'
-    $quitBtn.Dock = 'Fill'
-    $quitBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
-    $buttonPanel.Controls.Add($quitBtn, 3, 0)
-    $quitBtn.Add_Click({ Quit-App })
+    $saveRestart = New-Object System.Windows.Forms.Button
+    $saveRestart.Text = 'Save && Restart Monitoring'
+    $saveRestart.Dock = 'Fill'
+    $saveRestart.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
+    $buttonPanel.Controls.Add($saveRestart, 2, 0)
+    $saveRestart.Add_Click({ Save-And-Restart })
 
     $layout.Controls.Add($buttonPanel, 0, 3)
     [void]$layout.SetColumnSpan($buttonPanel, 4)
@@ -1562,6 +1555,13 @@ function Build-UI {
     $saveBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
     $extraPanel.Controls.Add($saveBtn, 2, 0)
     $saveBtn.Add_Click({ Save-Only })
+
+    $quitBtn = New-Object System.Windows.Forms.Button
+    $quitBtn.Text = 'Quit'
+    $quitBtn.Dock = 'Fill'
+    $quitBtn.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
+    $extraPanel.Controls.Add($quitBtn, 3, 0)
+    $quitBtn.Add_Click({ Quit-App })
 
     $layout.Controls.Add($extraPanel, 0, 4)
     [void]$layout.SetColumnSpan($extraPanel, 4)
