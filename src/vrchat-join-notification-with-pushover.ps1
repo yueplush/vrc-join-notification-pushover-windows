@@ -593,8 +593,8 @@ function Parse-RoomTransitionLine {
     }
     if(-not $matched){
         $jpSets = @(
-            @{ key = 'ルーム'; terms = @('参加','作成','入室','移動','入場') },
-            @{ key = 'インスタンス'; terms = @('参加','作成','入室','移動','入場') }
+            @{ key = "`u30EB`u30FC`u30E0"; terms = @("`u53C2`u52A0","`u4F5C`u6210","`u5165`u5BA4","`u79FB`u52D5","`u5165`u5834") },
+            @{ key = "`u30A4`u30F3`u30B9`u30BF`u30F3`u30B9"; terms = @("`u53C2`u52A0","`u4F5C`u6210","`u5165`u5BA4","`u79FB`u52D5","`u5165`u5834") }
         )
         foreach($jp in $jpSets){
             if($clean.Contains($jp.key)){
@@ -607,7 +607,7 @@ function Parse-RoomTransitionLine {
     }
     if(-not $matched){
         if([regex]::IsMatch($clean, '(?i)wrld_[0-9a-f\-]+')){
-            if($lower.Contains('room') -or $lower.Contains('instance') -or $clean.Contains('インスタンス') -or $clean.Contains('ルーム')){
+            if($lower.Contains('room') -or $lower.Contains('instance') -or $clean.Contains("`u30A4`u30F3`u30B9`u30BF`u30F3`u30B9") -or $clean.Contains("`u30EB`u30FC`u30E0")){
                 $matched = $true
             }
         }
@@ -1263,7 +1263,7 @@ function Monitor-Loop {
 function Get-SessionDescription {
     if($script:Session.Ready){
         $source = if($script:Session.Source){ $script:Session.Source } else { 'unknown' }
-        return "Session $($script:Session.SessionId) – $source"
+        return "Session $($script:Session.SessionId) - $source"
     }
     return 'No active session'
 }
@@ -1271,7 +1271,7 @@ function Get-SessionDescription {
 function Update-TrayState {
     $monitoring = ($script:MonitorThread -and $script:MonitorThread.IsAlive)
     $statusText = if($monitoring){ 'Monitoring' } else { 'Stopped' }
-    $tooltip = "$AppName – $statusText"
+    $tooltip = "$AppName - $statusText"
     if($script:Session.Ready){
         $tooltip += "`n" + (Get-SessionDescription)
     }
@@ -1773,7 +1773,7 @@ function Build-UI {
     [void]$layout.SetColumnSpan($installBox, 2)
 
     $browseInstall = New-Object System.Windows.Forms.Button
-    $browseInstall.Text = 'Browse…'
+    $browseInstall.Text = 'Browse...'
     $browseInstall.AutoSize = $true
     $browseInstall.Margin = New-Object System.Windows.Forms.Padding(4, 0, 0, 2)
     $layout.Controls.Add($browseInstall, 3, 0)
@@ -1799,7 +1799,7 @@ function Build-UI {
     [void]$layout.SetColumnSpan($logBox, 2)
 
     $browseLog = New-Object System.Windows.Forms.Button
-    $browseLog.Text = 'Browse…'
+    $browseLog.Text = 'Browse...'
     $browseLog.AutoSize = $true
     $browseLog.Margin = New-Object System.Windows.Forms.Padding(4, 0, 0, 2)
     $layout.Controls.Add($browseLog, 3, 1)
