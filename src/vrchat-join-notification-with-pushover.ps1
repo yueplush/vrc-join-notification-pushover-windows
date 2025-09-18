@@ -1412,27 +1412,25 @@ function Start-Monitoring {
     try {
         $tokenSource = New-Object System.Threading.CancellationTokenSource
         $token = $tokenSource.Token
-        $localToken = $token
-        $runspace = $script:PrimaryRunspace
-        $start = [System.Threading.ParameterizedThreadStart]{
-            param($state)
-            if($state -and $state.Runspace){
+        $monitorRunspace = $script:PrimaryRunspace
+        $monitorToken = $token
+        $start = [System.Threading.ThreadStart]{
+            $threadRunspace = $monitorRunspace
+            if($threadRunspace){
                 try {
-                    [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace = $state.Runspace
+                    [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace = $threadRunspace
                 } catch {}
             }
-            $workerToken = $null
-            if($state -and $state.Token){
-                $workerToken = $state.Token
-            }
-            if(-not $workerToken){
+            $workerToken = $monitorToken
+            if(-not ($workerToken -is [System.Threading.CancellationToken])){
                 $workerToken = [System.Threading.CancellationToken]::None
             }
             Monitor-Loop $workerToken
         }.GetNewClosure()
         $thread = New-Object System.Threading.Thread($start)
         $thread.IsBackground = $true
-        $thread.Start([pscustomobject]@{ Token = $localToken; Runspace = $runspace })
+        try { $thread.SetApartmentState([System.Threading.ApartmentState]::MTA) } catch {}
+        $thread.Start()
     } catch {
         if($thread){
             try {
@@ -1573,28 +1571,32 @@ function Ensure-ToastReady {
 
 function Send-ToastNotification {
     Param([string]$Title, [string]$Message)
-    if(-not (Ensure-ToastReady)){ return }
-    try {
-        $safeTitle = if([string]::IsNullOrWhiteSpace($Title)){ $AppName } else { $Title }
-        $safeMessage = if($Message){ $Message } else { '' }
-        $titleXml = [System.Security.SecurityElement]::Escape($safeTitle)
-        $messageXml = if([string]::IsNullOrWhiteSpace($safeMessage)){ $null } else { [System.Security.SecurityElement]::Escape($safeMessage) }
-        $builder = New-Object System.Text.StringBuilder
-        [void]$builder.Append('<toast activationType="foreground">')
-        [void]$builder.Append('<visual><binding template="ToastGeneric">')
-        [void]$builder.AppendFormat('<text>{0}</text>', $titleXml)
-        if($messageXml){
-            [void]$builder.AppendFormat('<text>{0}</text>', $messageXml)
+    $action = {
+        param($notifyTitle, $notifyMessage)
+        if(-not (Ensure-ToastReady)){ return }
+        try {
+            $safeTitle = if([string]::IsNullOrWhiteSpace($notifyTitle)){ $AppName } else { $notifyTitle }
+            $safeMessage = if($notifyMessage){ $notifyMessage } else { '' }
+            $titleXml = [System.Security.SecurityElement]::Escape($safeTitle)
+            $messageXml = if([string]::IsNullOrWhiteSpace($safeMessage)){ $null } else { [System.Security.SecurityElement]::Escape($safeMessage) }
+            $builder = New-Object System.Text.StringBuilder
+            [void]$builder.Append('<toast activationType="foreground">')
+            [void]$builder.Append('<visual><binding template="ToastGeneric">')
+            [void]$builder.AppendFormat('<text>{0}</text>', $titleXml)
+            if($messageXml){
+                [void]$builder.AppendFormat('<text>{0}</text>', $messageXml)
+            }
+            [void]$builder.Append('<audio src="ms-winsoundevent:Notification.Default"/>')
+            [void]$builder.Append('</binding></visual></toast>')
+            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $xml.LoadXml($builder.ToString())
+            $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+            $script:ToastState.Notifier.Show($toast)
+        } catch {
+            Write-AppLog "Windows toast failed: $($_.Exception.Message)"
         }
-        [void]$builder.Append('<audio src="ms-winsoundevent:Notification.Default"/>')
-        [void]$builder.Append('</binding></visual></toast>')
-        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-        $xml.LoadXml($builder.ToString())
-        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-        $script:ToastState.Notifier.Show($toast)
-    } catch {
-        Write-AppLog "Windows toast failed: $($_.Exception.Message)"
-    }
+    }.GetNewClosure()
+    Invoke-UIThread -Action $action -Arguments @($Title, $Message)
 }
 
 function Update-StartupButtons {
