@@ -11,6 +11,7 @@ A cross-platform helper that watches your VRChat logs and notifies you when play
 - Optional Pushover integration in addition to local desktop notifications.
 - Simple tray-aware GUI on both Windows (PowerShell + WinForms) and Linux (Python + Tk + an optional system tray that disables itself automatically when prerequisites are missing). The Windows window now matches the Linux layout, including the live status fields and compact spacing.
 - Windows builds guard against multiple launches and continue to raise desktop notifications (even when packaged as a `.exe`) by dispatching them through the UI thread.
+- Native Windows builds now register an AppUserModelID and Start Menu shortcut automatically so Action Center toasts (with the system chime) accompany the tray balloon on supported versions of Windows.
 - Linux build offers one-click login startup integration that writes/removes the `.desktop` autostart entry for you and confirms the action with a desktop notification.
 
 ## Repository layout
@@ -53,7 +54,8 @@ cd vrchat-join-notification-with-pushover
    `vrchat_join_notification` subfolder variants), so keep the icon alongside the `.exe` when redistributing a packaged copy.
 3. Open **Settings** from the tray icon (or via the window) to configure the install/cache folder, VRChat log directory, and optional Pushover credentials.
    The WinForms UI now mirrors the Linux layout with live **Status**, **Monitoring**, **Current Log**, **Session**, and **Last Event** indicators so you can see exactly what the watcher is doing.
-   The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops), trims the extra padding around each field, and wraps long status text automatically, while the action buttons inherit the slimmer spacing used by the Linux port for a consistent look.
+   The first-run window defaults to a more compact size that keeps every control visible (even on high DPI desktops), trims the extra padding around each field, and wraps long status text automatically, while the action buttons inherit the slimmer spacing used by the Linux port for a consistent look—the blank band that previously separated the middle controls is gone.
+   Clicking **Start Monitoring** now launches the background follower without tripping the `ParameterizedThreadStart` constructor error on Windows PowerShell 5.1 builds.
    Launching the packaged `.exe` while another copy is running now surfaces an informational dialog instead of starting a duplicate instance, and desktop notifications are marshalled onto the UI thread so Windows toasts fire reliably again.
 
 > [!NOTE]
@@ -62,6 +64,7 @@ cd vrchat-join-notification-with-pushover
 > If a previous build stopped at launch with a `The property 'Text' cannot be found` error, update to this release. The WinForms status table now registers its rows without leaking the intermediate index back to the caller, so StrictMode no longer halts the script.
 >
 > Likewise, we now suppress the column-style index values that PowerShell emits while wiring up the grid. This prevents `ps2exe` builds from hitting the `Cannot find an overload for 'Run' and the argument count: '1'` dialog at startup and lets the main form reach `Application.Run()` as intended.
+> Action Center toasts are emitted via a registered AppUserModelID, so Windows 10 and newer play the native notification (with sound) alongside the tray balloon automatically.
 
 ---
 

@@ -16,6 +16,18 @@ This PowerShell build mirrors the Python/Tk Linux application:
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+if(-not ('NativeMethods.AppUserModel' -as [type])){
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+namespace NativeMethods {
+    internal static class AppUserModel {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
+    }
+}
+"@
+}
 [System.Windows.Forms.Application]::EnableVisualStyles()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -26,6 +38,7 @@ $ConfigFileName = 'config.json'
 $AppLogName     = 'notifier.log'
 $POUrl          = 'https://api.pushover.net/1/messages.json'
 $IconFileName   = 'notification.ico'
+$ToastAppId     = 'VRChatJoinNotificationWithPushover.App'
 
 $NotifyCooldownSeconds                 = 10
 $SessionFallbackGraceSeconds           = 30
@@ -43,6 +56,12 @@ $script:MonitorTokenSource = $null
 $script:LoggerLock = New-Object System.Object
 $script:IsQuitting = $false
 $script:TrayIcon = $null
+$script:ToastState = [ordered]@{
+    Initialized = $false
+    Ready       = $false
+    Notifier    = $null
+    Shortcut    = $null
+}
 
 $script:Session = [ordered]@{
     SessionId          = 0
@@ -932,7 +951,10 @@ function Handle-PlayerLeft {
 
 function Send-DesktopNotification {
     Param([string]$Title, [string]$Message)
-    if(-not $script:TrayIcon){ return }
+    if(-not $script:TrayIcon){
+        Send-ToastNotification $Title $Message
+        return
+    }
     $notifyAction = {
         param($notifyTitle, $notifyMessage)
         if(-not $script:TrayIcon){ return }
@@ -944,6 +966,7 @@ function Send-DesktopNotification {
         } catch {}
     }.GetNewClosure()
     Invoke-UIThread -Action $notifyAction -Arguments @($Title, $Message)
+    Send-ToastNotification $Title $Message
 }
 
 function Send-PushoverNotification {
@@ -1264,7 +1287,7 @@ function Start-Monitoring {
     Ensure-Dir $script:Config.InstallDir
     $script:MonitorTokenSource = New-Object System.Threading.CancellationTokenSource
     $token = $script:MonitorTokenSource.Token
-    $start = New-Object System.Threading.ParameterizedThreadStart({ param($ct) Monitor-Loop $ct })
+    $start = [System.Threading.ParameterizedThreadStart]{ param($ct) Monitor-Loop $ct }
     $script:MonitorThread = New-Object System.Threading.Thread($start)
     $script:MonitorThread.IsBackground = $true
     $script:MonitorThread.Start($token)
@@ -1298,23 +1321,29 @@ function Get-LauncherPath {
     return $arg0
 }
 
-function Get-AppIcon {
-    $candidates = @()
+function Get-AppIconPath {
+    $candidates = New-Object System.Collections.Generic.List[string]
     $addCandidates = {
         param([string]$BasePath)
-        if(-not $BasePath){ return }
-        $candidates += Join-Path $BasePath $IconFileName
-        $candidates += Join-Path (Join-Path $BasePath 'vrchat_join_notification') $IconFileName
-        $candidates += Join-Path (Join-Path $BasePath 'src') $IconFileName
-        $candidates += Join-Path (Join-Path (Join-Path $BasePath 'src') 'vrchat_join_notification') $IconFileName
+        if([string]::IsNullOrWhiteSpace($BasePath)){ return }
+        $candidates.Add((Join-Path $BasePath $IconFileName)) | Out-Null
+        $candidates.Add((Join-Path (Join-Path $BasePath 'vrchat_join_notification') $IconFileName)) | Out-Null
+        $candidates.Add((Join-Path (Join-Path $BasePath 'src') $IconFileName)) | Out-Null
+        $candidates.Add((Join-Path (Join-Path (Join-Path $BasePath 'src') 'vrchat_join_notification') $IconFileName)) | Out-Null
     }
     if($PSScriptRoot){ & $addCandidates $PSScriptRoot }
     $launcherDir = Split-Path (Get-LauncherPath) -Parent
     if($launcherDir){ & $addCandidates $launcherDir }
     foreach($candidate in $candidates){
-        if($candidate -and (Test-Path $candidate)){
-            try { return New-Object System.Drawing.Icon($candidate) } catch {}
-        }
+        if($candidate -and (Test-Path $candidate)){ return $candidate }
+    }
+    return $null
+}
+
+function Get-AppIcon {
+    $iconPath = Get-AppIconPath
+    if($iconPath){
+        try { return New-Object System.Drawing.Icon($iconPath) } catch {}
     }
     return [System.Drawing.SystemIcons]::Information
 }
@@ -1322,6 +1351,86 @@ function Get-AppIcon {
 function Get-StartupShortcutPath {
     $startup = [Environment]::GetFolderPath('Startup')
     return Join-Path $startup 'VRChat Join Notification with Pushover.lnk'
+}
+
+function Get-ToastShortcutPath {
+    try {
+        $programs = [Environment]::GetFolderPath('Programs')
+    } catch {
+        return $null
+    }
+    if([string]::IsNullOrWhiteSpace($programs)){ return $null }
+    return Join-Path $programs 'VRChat Join Notification with Pushover.lnk'
+}
+
+function Ensure-ToastReady {
+    if($script:ToastState.Initialized){ return $script:ToastState.Ready }
+    $script:ToastState.Initialized = $true
+    try {
+        $launcher = Get-LauncherPath
+        if([string]::IsNullOrWhiteSpace($launcher)){ throw "Missing launcher path." }
+        [NativeMethods.AppUserModel]::SetCurrentProcessExplicitAppUserModelID($ToastAppId) | Out-Null
+        $shortcutPath = Get-ToastShortcutPath
+        if($shortcutPath){
+            Ensure-Dir (Split-Path $shortcutPath -Parent)
+            $shell = $null
+            try {
+                $shell = New-Object -ComObject WScript.Shell
+            } catch {}
+            if($shell){
+                $shortcut = $shell.CreateShortcut($shortcutPath)
+                $shortcut.TargetPath = $launcher
+                $shortcut.WorkingDirectory = Split-Path $launcher -Parent
+                $shortcut.Arguments = ''
+                $iconPath = Get-AppIconPath
+                if($iconPath){
+                    $shortcut.IconLocation = $iconPath
+                } else {
+                    $shortcut.IconLocation = "$launcher,0"
+                }
+                try { $shortcut.AppUserModelID = $ToastAppId } catch {}
+                $shortcut.Save()
+                $script:ToastState.Shortcut = $shortcutPath
+            }
+        }
+        $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
+        $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType=WindowsRuntime]
+        $script:ToastState.Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($ToastAppId)
+        $script:ToastState.Ready = $true
+    } catch {
+        $script:ToastState.Notifier = $null
+        $script:ToastState.Ready = $false
+        $script:ToastState.Initialized = $false
+        $msg = "Toast initialization failed: $($_.Exception.Message)"
+        Write-AppLog $msg
+    }
+    return $script:ToastState.Ready
+}
+
+function Send-ToastNotification {
+    Param([string]$Title, [string]$Message)
+    if(-not (Ensure-ToastReady)){ return }
+    try {
+        $safeTitle = if([string]::IsNullOrWhiteSpace($Title)){ $AppName } else { $Title }
+        $safeMessage = if($Message){ $Message } else { '' }
+        $titleXml = [System.Security.SecurityElement]::Escape($safeTitle)
+        $messageXml = if([string]::IsNullOrWhiteSpace($safeMessage)){ $null } else { [System.Security.SecurityElement]::Escape($safeMessage) }
+        $builder = New-Object System.Text.StringBuilder
+        [void]$builder.Append('<toast activationType="foreground">')
+        [void]$builder.Append('<visual><binding template="ToastGeneric">')
+        [void]$builder.AppendFormat('<text>{0}</text>', $titleXml)
+        if($messageXml){
+            [void]$builder.AppendFormat('<text>{0}</text>', $messageXml)
+        }
+        [void]$builder.Append('<audio src="ms-winsoundevent:Notification.Default"/>')
+        [void]$builder.Append('</binding></visual></toast>')
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml($builder.ToString())
+        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+        $script:ToastState.Notifier.Show($toast)
+    } catch {
+        Write-AppLog "Windows toast failed: $($_.Exception.Message)"
+    }
 }
 
 function Update-StartupButtons {
@@ -1585,7 +1694,7 @@ function Build-UI {
     $buttonPanel.Dock = 'Fill'
     $buttonPanel.AutoSize = $true
     $buttonPanel.AutoSizeMode = 'GrowAndShrink'
-    $buttonPanel.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 0)
+    $buttonPanel.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
     $buttonPanel.Padding = New-Object System.Windows.Forms.Padding(0)
     $buttonPanel.RowCount = 1
     [void]$buttonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
@@ -1620,7 +1729,7 @@ function Build-UI {
     $extraPanel.Dock = 'Fill'
     $extraPanel.AutoSize = $true
     $extraPanel.AutoSizeMode = 'GrowAndShrink'
-    $extraPanel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $extraPanel.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
     $extraPanel.RowCount = 1
     [void]$extraPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     foreach($i in 0..3){ [void]$extraPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
@@ -1659,7 +1768,7 @@ function Build-UI {
     $statusGroup = New-Object System.Windows.Forms.GroupBox
     $statusGroup.Text = 'Status'
     $statusGroup.Dock = 'Fill'
-    $statusGroup.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 0)
+    $statusGroup.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
     $statusGroup.Padding = New-Object System.Windows.Forms.Padding(10, 10, 10, 10)
 
     $statusTable = New-Object System.Windows.Forms.TableLayoutPanel
@@ -1817,6 +1926,7 @@ function Main {
     $form = Build-UI $script:Config
     Update-StartupButtons
     Build-Tray
+    Ensure-ToastReady | Out-Null
     Update-TrayState
     Apply-StartupState
     if($script:LoadError){
