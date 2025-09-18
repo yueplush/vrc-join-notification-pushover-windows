@@ -135,7 +135,15 @@ $script:Controls = @{}
 $script:SingleInstanceMutex = $null
 $script:HasMutexOwnership = $false
 $script:AdditionalMutexes = @()
-$script:PrimaryRunspace = $ExecutionContext.Runspace
+$script:PrimaryRunspace = $null
+try {
+    if($ExecutionContext -and $ExecutionContext.PSObject.Properties.Match('Runspace').Count -gt 0){
+        $script:PrimaryRunspace = $ExecutionContext.Runspace
+    }
+} catch {}
+if(-not $script:PrimaryRunspace){
+    try { $script:PrimaryRunspace = [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace } catch {}
+}
 
 # ----------------------------- Helper utils ------------------------------
 function Expand-PathSafe {
