@@ -1672,11 +1672,11 @@ class AppController:
             self.status_var.set(error_text)
             self.logger.log(error_text)
             try:
-                messagebox.showerror(
-                    APP_NAME,
+                message = (
                     "Failed to start monitoring:\n"
-                    f"Install folder: {new_install_dir}\n{exc}",
+                    f"Install folder: {new_install_dir}\n{exc}"
                 )
+                messagebox.showerror(APP_NAME, message)
             except tk.TclError:
                 pass
             self.install_var.set(previous_install_dir)
