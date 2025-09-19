@@ -29,7 +29,14 @@ cd vrchat-join-notification-with-pushover
 ---
 
 ## Windows quick start (Go CLI)
-1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**.
+1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**. The
+   installer adds Go to `PATH`, but you may need to open a new terminal. Verify with:
+   ```powershell
+   go version
+   ```
+   > If PowerShell reports "`go : The term 'go' is not recognized`", Go is not in your `PATH` yet.
+   > Install it (e.g. `winget install Go.Go`) or reopen PowerShell after installing from the Go
+   > website.
 2. Clone the repository and build the executable:
    ```powershell
    go build -o .\vrchat-join-notification-with-pushover.exe .\cmd\vrchat-join-notification-with-pushover
@@ -37,6 +44,13 @@ cd vrchat-join-notification-with-pushover
    > Building from another platform? Cross-compile with:
    > ```bash
    > GOOS=windows GOARCH=amd64 go build -o vrchat-join-notification-with-pushover.exe ./cmd/vrchat-join-notification-with-pushover
+   > ```
+   > In **PowerShell**, set the temporary environment variables with:
+   > ```powershell
+   > $env:GOOS = 'windows'
+   > $env:GOARCH = 'amd64'
+   > go build -o vrchat-join-notification-with-pushover.exe ./cmd/vrchat-join-notification-with-pushover
+   > Remove-Item Env:GOOS, Env:GOARCH
    > ```
 3. Run the interactive configuration once to set the install/cache directory, VRChat log folder, and optional Pushover keys:
    ```powershell
