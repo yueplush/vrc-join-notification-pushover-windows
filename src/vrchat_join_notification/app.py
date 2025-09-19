@@ -1350,13 +1350,8 @@ class SessionTracker:
             placeholder_label = "Player"
         if display_name.lower() == "you" and parsed_name:
             display_name = parsed_name
-        message_base = display_name or placeholder_label or "You"
-        if placeholder_label:
-            if not message_base:
-                message_base = placeholder_label
-            else:
-                message_base = f"{message_base}({placeholder_label})"
-        message = f"{message_base} joined your instance."
+        message_name = display_name or placeholder_label or "You"
+        message = f"{message_name} joined your instance."
         key = f"self:{self.session_id}"
         self.notify_all(key, APP_NAME, message)
         self.pending_self_join = {
@@ -1459,10 +1454,6 @@ class SessionTracker:
         elif placeholder_for_message.lower() == "you":
             placeholder_for_message = "Player"
         message_name = cleaned_name or placeholder_for_message or "Unknown VRChat user"
-        if cleaned_name:
-            message_name = f"{cleaned_name}({placeholder_for_message})"
-        else:
-            message_name = placeholder_for_message
         desktop_notification = True
         if was_placeholder and not cleaned_user:
             placeholder_lower = (placeholder_for_message or "").strip().lower()
