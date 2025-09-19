@@ -1,4 +1,4 @@
-"""VRChat Join Notification with Pushover (Linux).
+"""VRChat Join Notification with Pushover.
 
 This module mirrors the behaviour of the Windows PowerShell implementation while
 using a Tkinter GUI, libnotify desktop notifications and Pushover pushes.
@@ -1418,7 +1418,7 @@ class AppController:
         self._refresh_window_metrics()
 
     def _build_ui(self) -> None:
-        self.root.title(f"{APP_NAME} (Linux)")
+        self.root.title(APP_NAME)
         self.root.iconname("VRC-Notifier")
         try:
             self.root.wm_class("VRC-Notifier", "VRC-Notifier")
