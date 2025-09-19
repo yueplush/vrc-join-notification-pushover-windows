@@ -3,58 +3,32 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
+
+	"fyne.io/fyne/v2"
+	fyneapp "fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
+	"fyne.io/fyne/v2/widget"
 )
 
 const (
-	ctrlInstallEdit  uint16 = 1001
-	ctrlLogEdit      uint16 = 1002
-	ctrlUserEdit     uint16 = 1003
-	ctrlTokenEdit    uint16 = 1004
-	ctrlStatusLabel  uint16 = 2001
-	ctrlMonitorLabel uint16 = 2002
-	ctrlCurrentLog   uint16 = 2003
-	ctrlSessionLabel uint16 = 2004
-	ctrlLastEvent    uint16 = 2005
+	windowWidth  = 880
+	windowHeight = 520
+
+	startupRegistryPath        = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+	startupRegistryDescription = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 )
 
-const (
-	cmdSaveRestart   uint16 = 3001
-	cmdSaveOnly      uint16 = 3002
-	cmdStart         uint16 = 3004
-	cmdRestart       uint16 = 3005
-	cmdStop          uint16 = 3006
-	cmdQuit          uint16 = 3007
-	cmdBrowseInstall uint16 = 3008
-	cmdBrowseLogs    uint16 = 3009
-	cmdAddStartup    uint16 = 3010
-	cmdRemoveStartup uint16 = 3011
-)
-
-const (
-	trayCmdOpen    uint16 = 4001
-	trayCmdStart   uint16 = 4002
-	trayCmdRestart uint16 = 4003
-	trayCmdStop    uint16 = 4004
-	trayCmdQuit    uint16 = 4005
-)
-
-const startupRegistryPath = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-const startupRegistryDescription = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-
-var (
-	mainClassName    = "VRChatJoinNotifierWindow"
-	windowProc       = syscall.NewCallback(wndProc)
-	activeController *Controller
-)
-
-// Controller coordinates the Win32 window, tray icon and background workers.
+// Controller owns the application window, widgets and background workers.
 type Controller struct {
 	cfg      *AppConfig
 	logger   *AppLogger
@@ -62,209 +36,108 @@ type Controller struct {
 	pushover *PushoverClient
 	session  *SessionTracker
 
-	hwnd       syscall.Handle
-	icon       syscall.Handle
-	controls   map[uint16]syscall.Handle
-	tray       *trayIcon
+	app    fyne.App
+	window fyne.Window
+
+	installEntry *widget.Entry
+	logEntry     *widget.Entry
+	userEntry    *widget.Entry
+	tokenEntry   *widget.Entry
+
+	monitorLabel    *widget.Label
+	currentLogLabel *widget.Label
+	sessionLabel    *widget.Label
+	lastEventLabel  *widget.Label
+	statusLabel     *widget.Label
+
+	saveRestartButton   *widget.Button
+	startButton         *widget.Button
+	stopButton          *widget.Button
+	addStartupButton    *widget.Button
+	removeStartupButton *widget.Button
+	saveButton          *widget.Button
+	quitButton          *widget.Button
+
 	monitor    *LogMonitor
 	eventCh    chan MonitorEvent
 	eventMu    sync.Mutex
 	eventQueue []MonitorEvent
+	eventDone  chan struct{}
 
 	loadNotice string
 	quitting   bool
 }
 
+// NewController constructs the Fyne based GUI controller.
 func NewController(cfg *AppConfig, loadNotice string, logger *AppLogger) (*Controller, error) {
 	controller := &Controller{
 		cfg:        cfg,
 		logger:     logger,
 		notifier:   NewDesktopNotifier(logger),
 		pushover:   NewPushoverClient(cfg, logger),
-		loadNotice: loadNotice,
-		controls:   make(map[uint16]syscall.Handle),
+		session:    nil,
 		eventCh:    make(chan MonitorEvent, 64),
+		eventDone:  make(chan struct{}),
+		loadNotice: loadNotice,
 	}
 	controller.session = NewSessionTracker(controller.notifier, controller.pushover, controller.logger)
-	iconPath := locateNotificationIcon()
-	controller.icon = loadIconFromFile(iconPath)
-	if controller.icon == 0 {
-		controller.icon = loadDefaultIcon()
-	}
-	activeController = controller
-	if err := registerClass(mainClassName, windowProc, controller.icon); err != nil {
-		return nil, fmt.Errorf("register window class: %w", err)
-	}
-	hwnd, err := createWindow(mainClassName, AppName, 920, 560, 0)
-	if err != nil {
-		return nil, fmt.Errorf("create window: %w", err)
-	}
-	controller.hwnd = hwnd
-	controller.createControls()
+
+	controller.app = fyneapp.NewWithID("VRChatJoinNotificationWithPushover")
+	controller.window = controller.app.NewWindow(AppName)
+	controller.window.Resize(fyne.NewSize(windowWidth, windowHeight))
+	controller.window.SetMaster()
+	controller.window.SetOnClosed(func() {
+		controller.quitting = true
+	})
+
+	controller.buildUI()
 	controller.updateMonitoringButtons()
 	controller.updateStartupButtons()
-	showWindow(controller.hwnd)
-	tray, err := newTrayIcon(controller.hwnd, controller.icon)
-	if err != nil {
-		if controller.logger != nil {
-			controller.logger.Logf("Tray icon disabled: %v", err)
-		}
-	} else {
-		controller.tray = tray
-	}
-	go controller.processEvents()
 	controller.applyStartupState()
+
+	iconPath := locateNotificationIcon()
+	if iconPath != "" {
+		if data, err := os.ReadFile(iconPath); err == nil {
+			controller.window.SetIcon(fyne.NewStaticResource(filepath.Base(iconPath), data))
+		}
+	}
+
+	go controller.consumeEvents()
 	return controller, nil
 }
 
+// Run starts the UI event loop.
 func (c *Controller) Run() error {
 	defer c.cleanup()
-	returnCode := messageLoop()
-	if c.logger != nil {
-		c.logger.Logf("Message loop exited with code %d", returnCode)
-	}
+	c.window.Show()
+	c.app.Run()
 	return nil
 }
 
 func (c *Controller) cleanup() {
-	if c.monitor != nil {
-		c.monitor.Stop()
-		c.monitor = nil
-	}
-	if c.tray != nil {
-		c.tray.dispose()
-		c.tray = nil
-	}
+	c.stopMonitoring()
 	close(c.eventCh)
+	<-c.eventDone
 }
 
-func (c *Controller) createControls() {
-	font := defaultUIFont()
-	client := getClientRect(c.hwnd)
-	contentWidth := client.Right - client.Left
-	margin := int32(18)
-	gap := int32(12)
-	rowHeight := int32(24)
-
-	createStatic := func(text string, x, y, width int32) syscall.Handle {
-		ctrl := createControl("STATIC", text, 0, x, y, width, rowHeight+4, c.hwnd, 0, 0)
-		sendMessage(ctrl, wmSetFont, uintptr(font), 1)
-		return ctrl
-	}
-	createButton := func(id uint16, text string, x, y, width int32) {
-		ctrl := createControl("BUTTON", text, bsPushButton|wsTabStop, x, y, width, rowHeight+10, c.hwnd, id, 0)
-		sendMessage(ctrl, wmSetFont, uintptr(font), 1)
-		c.controls[id] = ctrl
-	}
-
-	labelWidth := int32(220)
-	browseWidth := int32(110)
-	editWidth := contentWidth - (margin*2 + labelWidth + browseWidth + gap)
-	if editWidth < 240 {
-		editWidth = 240
-	}
-	y := margin
-
-	createStatic("Install Folder (logs/cache):", margin, y, labelWidth)
-	installEdit := createControl("EDIT", c.cfg.InstallDir, esAutoHScroll|wsTabStop, margin+labelWidth, y-2, editWidth, rowHeight+6, c.hwnd, ctrlInstallEdit, wsExClientEdge)
-	sendMessage(installEdit, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlInstallEdit] = installEdit
-	createButton(cmdBrowseInstall, "Browse...", margin+labelWidth+editWidth+gap, y-4, browseWidth)
-
-	y += rowHeight + 18
-
-	createStatic("VRChat Log Folder:", margin, y, labelWidth)
-	logEdit := createControl("EDIT", c.cfg.VRChatLogDir, esAutoHScroll|wsTabStop, margin+labelWidth, y-2, editWidth, rowHeight+6, c.hwnd, ctrlLogEdit, wsExClientEdge)
-	sendMessage(logEdit, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlLogEdit] = logEdit
-	createButton(cmdBrowseLogs, "Browse...", margin+labelWidth+editWidth+gap, y-4, browseWidth)
-
-	y += rowHeight + 20
-
-	credentialLabelWidth := int32(160)
-	columnGap := int32(24)
-	credentialFieldWidth := (contentWidth - (margin*2 + credentialLabelWidth*2 + columnGap)) / 2
-	if credentialFieldWidth < 180 {
-		credentialFieldWidth = 180
-	}
-
-	createStatic("Pushover User Key:", margin, y, credentialLabelWidth)
-	userEdit := createControl("EDIT", c.cfg.PushoverUser, esAutoHScroll|wsTabStop, margin+credentialLabelWidth, y-2, credentialFieldWidth, rowHeight+6, c.hwnd, ctrlUserEdit, wsExClientEdge)
-	sendMessage(userEdit, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlUserEdit] = userEdit
-
-	tokenX := margin + credentialLabelWidth + credentialFieldWidth + columnGap
-	createStatic("Pushover API Token:", tokenX, y, credentialLabelWidth)
-	tokenEdit := createControl("EDIT", c.cfg.PushoverToken, esAutoHScroll|wsTabStop, tokenX+credentialLabelWidth, y-2, credentialFieldWidth, rowHeight+6, c.hwnd, ctrlTokenEdit, wsExClientEdge)
-	sendMessage(tokenEdit, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlTokenEdit] = tokenEdit
-
-	y += rowHeight + 28
-
-	primaryButtonCount := int32(3)
-	primaryAvailable := contentWidth - (margin*2 + gap*(primaryButtonCount-1))
-	primaryWidth := primaryAvailable / primaryButtonCount
-	if primaryWidth < 170 {
-		primaryWidth = 170
-	}
-	buttonY := y
-	x := margin
-	createButton(cmdSaveRestart, "Save and Restart Monitoring", x, buttonY, primaryWidth)
-	x += primaryWidth + gap
-	createButton(cmdStart, "Start Monitoring", x, buttonY, primaryWidth)
-	x += primaryWidth + gap
-	createButton(cmdStop, "Stop Monitoring", x, buttonY, primaryWidth)
-
-	y += rowHeight + 42
-
-	secondaryButtonCount := int32(4)
-	secondaryAvailable := contentWidth - (margin*2 + gap*(secondaryButtonCount-1))
-	secondaryWidth := secondaryAvailable / secondaryButtonCount
-	if secondaryWidth < 170 {
-		secondaryWidth = 170
-	}
-	x = margin
-	createButton(cmdAddStartup, "Add to Startup", x, y, secondaryWidth)
-	x += secondaryWidth + gap
-	createButton(cmdRemoveStartup, "Remove from Startup", x, y, secondaryWidth)
-	x += secondaryWidth + gap
-	createButton(cmdSaveOnly, "Save", x, y, secondaryWidth)
-	x += secondaryWidth + gap
-	createButton(cmdQuit, "Quit", x, y, secondaryWidth)
-
-	y += rowHeight + 36
-
-	infoLabelWidth := int32(110)
-	infoValueWidth := contentWidth - (margin*2 + infoLabelWidth)
-	if infoValueWidth < 260 {
-		infoValueWidth = 260
-	}
-	makeInfoRow := func(caption string, id uint16) {
-		createStatic(caption, margin, y, infoLabelWidth)
-		value := createControl("STATIC", "", 0, margin+infoLabelWidth, y, infoValueWidth, rowHeight+4, c.hwnd, id, 0)
-		sendMessage(value, wmSetFont, uintptr(font), 1)
-		c.controls[id] = value
-		y += rowHeight + 10
-	}
-	makeInfoRow("Monitor:", ctrlMonitorLabel)
-	makeInfoRow("Current log:", ctrlCurrentLog)
-	makeInfoRow("Session:", ctrlSessionLabel)
-	makeInfoRow("Last event:", ctrlLastEvent)
-	makeInfoRow("Status:", ctrlStatusLabel)
-
-	c.setLabel(ctrlMonitorLabel, "Stopped")
-	c.setLabel(ctrlCurrentLog, "(none)")
-	c.setLabel(ctrlSessionLabel, "No active session")
-	c.setLabel(ctrlLastEvent, "")
-	c.setLabel(ctrlStatusLabel, "Idle")
-}
-
-func (c *Controller) processEvents() {
+func (c *Controller) consumeEvents() {
+	defer close(c.eventDone)
 	for ev := range c.eventCh {
 		c.eventMu.Lock()
 		c.eventQueue = append(c.eventQueue, ev)
 		c.eventMu.Unlock()
-		postMessage(c.hwnd, wmEventNotify, 0, 0)
+		if drv := c.app.Driver(); drv != nil {
+			drv.RunOnMain(func() {
+				c.flushEvents()
+			})
+		}
+	}
+}
+
+func (c *Controller) flushEvents() {
+	events := c.drainEvents()
+	for _, ev := range events {
+		c.handleEvent(ev)
 	}
 }
 
@@ -275,6 +148,158 @@ func (c *Controller) drainEvents() []MonitorEvent {
 	copy(events, c.eventQueue)
 	c.eventQueue = c.eventQueue[:0]
 	return events
+}
+
+func (c *Controller) buildUI() {
+	c.installEntry = widget.NewEntry()
+	c.installEntry.SetText(c.cfg.InstallDir)
+	c.logEntry = widget.NewEntry()
+	c.logEntry.SetText(c.cfg.VRChatLogDir)
+	c.userEntry = widget.NewEntry()
+	c.userEntry.SetText(c.cfg.PushoverUser)
+	c.tokenEntry = widget.NewEntry()
+	c.tokenEntry.SetText(c.cfg.PushoverToken)
+
+	browseInstall := widget.NewButton("Browse...", func() {
+		c.chooseFolder(c.installEntry)
+	})
+	browseLogs := widget.NewButton("Browse...", func() {
+		c.chooseFolder(c.logEntry)
+	})
+
+	installRow := container.NewBorder(nil, nil, nil, browseInstall, c.installEntry)
+	logRow := container.NewBorder(nil, nil, nil, browseLogs, c.logEntry)
+
+	pathsForm := widget.NewForm(
+		widget.NewFormItem("Install Folder (logs/cache):", installRow),
+		widget.NewFormItem("VRChat Log Folder:", logRow),
+	)
+
+	userLabel := widget.NewLabel("Pushover User Key:")
+	tokenLabel := widget.NewLabel("Pushover API Token:")
+	userLabel.Alignment = fyne.TextAlignLeading
+	tokenLabel.Alignment = fyne.TextAlignLeading
+
+	pushoverRow := container.NewGridWithColumns(2,
+		container.NewVBox(userLabel, c.userEntry),
+		container.NewVBox(tokenLabel, c.tokenEntry),
+	)
+
+	c.saveRestartButton = widget.NewButton("Save and Restart Monitoring", func() {
+		c.saveAndRestart()
+	})
+	c.startButton = widget.NewButton("Start Monitoring", func() {
+		if c.monitor != nil {
+			c.setStatus("Monitoring is already running.")
+			return
+		}
+		c.startMonitoring()
+	})
+	c.stopButton = widget.NewButton("Stop Monitoring", func() {
+		c.stopMonitoring()
+	})
+
+	primaryButtons := container.NewGridWithColumns(3,
+		c.saveRestartButton,
+		c.startButton,
+		c.stopButton,
+	)
+
+	c.addStartupButton = widget.NewButton("Add to Startup", func() {
+		c.addToStartup()
+	})
+	c.removeStartupButton = widget.NewButton("Remove from Startup", func() {
+		c.removeFromStartup()
+	})
+	c.saveButton = widget.NewButton("Save", func() {
+		c.saveOnly()
+	})
+	c.quitButton = widget.NewButton("Quit", func() {
+		c.requestQuit()
+	})
+
+	secondaryButtons := container.NewGridWithColumns(4,
+		c.addStartupButton,
+		c.removeStartupButton,
+		c.saveButton,
+		c.quitButton,
+	)
+
+	c.monitorLabel = widget.NewLabel("Stopped")
+	c.currentLogLabel = widget.NewLabel("(none)")
+	c.sessionLabel = widget.NewLabel("No active session")
+	c.lastEventLabel = widget.NewLabel("")
+	c.statusLabel = widget.NewLabel("Idle")
+
+	for _, lbl := range []*widget.Label{c.monitorLabel, c.currentLogLabel, c.sessionLabel, c.lastEventLabel, c.statusLabel} {
+		lbl.Wrapping = fyne.TextWrapWord
+	}
+
+	infoForm := widget.NewForm(
+		widget.NewFormItem("Monitor:", c.monitorLabel),
+		widget.NewFormItem("Current log:", c.currentLogLabel),
+		widget.NewFormItem("Session:", c.sessionLabel),
+		widget.NewFormItem("Last event:", c.lastEventLabel),
+		widget.NewFormItem("Status:", c.statusLabel),
+	)
+
+	content := container.NewVBox(
+		pathsForm,
+		widget.NewSeparator(),
+		pushoverRow,
+		widget.NewSeparator(),
+		primaryButtons,
+		secondaryButtons,
+		widget.NewSeparator(),
+		infoForm,
+	)
+
+	c.window.SetContent(container.NewPadded(content))
+}
+
+func (c *Controller) chooseFolder(target *widget.Entry) {
+	chooser := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+		if err != nil {
+			c.setStatus(fmt.Sprintf("Folder selection failed: %v", err))
+			return
+		}
+		if uri == nil {
+			return
+		}
+		path := uriToPath(uri)
+		if path == "" {
+			return
+		}
+		target.SetText(path)
+	}, c.window)
+	if chooser == nil {
+		return
+	}
+	current := strings.TrimSpace(target.Text)
+	if current != "" {
+		if uri, err := storage.ListerForURI(storage.NewFileURI(current)); err == nil {
+			chooser.SetLocation(uri)
+		}
+	}
+	chooser.SetConfirmText("Select")
+	chooser.Show()
+}
+
+func uriToPath(uri fyne.URI) string {
+	if uri == nil {
+		return ""
+	}
+	path := uri.Path()
+	if runtime.GOOS == "windows" {
+		path = strings.TrimPrefix(path, "//")
+		if strings.HasPrefix(path, "/") && len(path) > 2 && path[2] == ':' {
+			path = path[1:]
+		}
+	}
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(filepath.FromSlash(path))
 }
 
 func (c *Controller) applyStartupState() {
@@ -299,23 +324,23 @@ func (c *Controller) handleEvent(ev MonitorEvent) {
 	case EventStatus:
 		c.setStatus(ev.Message)
 	case EventLogSwitch:
-		c.setLabel(ctrlCurrentLog, ev.Path)
+		c.currentLogLabel.SetText(ev.Path)
 		c.session.HandleLogSwitch(ev.Path)
-		c.setLabel(ctrlSessionLabel, c.session.Summary())
+		c.sessionLabel.SetText(c.session.Summary())
 		c.setStatus("Monitoring " + filepath.Base(ev.Path))
 	case EventError:
 		c.setStatus(ev.Message)
 	case EventRoomEnter:
 		msg := c.session.HandleRoomEnter(ev.Room)
 		c.setStatus(msg)
-		c.setLabel(ctrlSessionLabel, c.session.Summary())
+		c.sessionLabel.SetText(c.session.Summary())
 	case EventRoomLeft:
 		msg := c.session.HandleRoomLeft()
 		c.setStatus(msg)
-		c.setLabel(ctrlSessionLabel, c.session.Summary())
+		c.sessionLabel.SetText(c.session.Summary())
 	case EventSelfJoin:
 		c.session.HandleSelfJoin(ev.Message)
-		c.setLabel(ctrlSessionLabel, c.session.Summary())
+		c.sessionLabel.SetText(c.session.Summary())
 	case EventPlayerJoin:
 		if msg := c.session.HandlePlayerJoin(ev.Player); msg != "" {
 			c.setStatus(msg)
@@ -325,49 +350,7 @@ func (c *Controller) handleEvent(ev MonitorEvent) {
 			c.setStatus(fmt.Sprintf("%s left the instance.", name))
 		}
 	}
-	c.setLabel(ctrlLastEvent, c.session.LastEvent())
-	c.updateTray()
-}
-
-func (c *Controller) handleCommand(id uint16) {
-	switch id {
-	case cmdSaveRestart:
-		c.saveAndRestart()
-	case cmdSaveOnly:
-		c.saveOnly()
-	case cmdStart:
-		if c.monitor != nil {
-			c.setStatus("Monitoring is already running.")
-		} else {
-			c.startMonitoring()
-		}
-	case cmdRestart:
-		c.restartMonitoring()
-	case cmdStop:
-		c.stopMonitoring()
-	case cmdQuit:
-		c.requestQuit()
-	case cmdBrowseInstall, cmdBrowseLogs:
-		c.setStatus("Enter the folder path manually in the text box.")
-	case cmdAddStartup:
-		c.addToStartup()
-	case cmdRemoveStartup:
-		c.removeFromStartup()
-	case trayCmdOpen:
-		c.showWindow()
-	case trayCmdStart:
-		if c.monitor != nil {
-			c.setStatus("Monitoring is already running.")
-		} else {
-			c.startMonitoring()
-		}
-	case trayCmdRestart:
-		c.restartMonitoring()
-	case trayCmdStop:
-		c.stopMonitoring()
-	case trayCmdQuit:
-		c.requestQuit()
-	}
+	c.lastEventLabel.SetText(c.session.LastEvent())
 }
 
 func (c *Controller) saveAndRestart() {
@@ -401,10 +384,10 @@ func (c *Controller) saveOnly() {
 }
 
 func (c *Controller) saveConfig() error {
-	c.cfg.InstallDir = expandPath(c.getText(ctrlInstallEdit))
-	c.cfg.VRChatLogDir = expandPath(c.getText(ctrlLogEdit))
-	c.cfg.PushoverUser = strings.TrimSpace(c.getText(ctrlUserEdit))
-	c.cfg.PushoverToken = strings.TrimSpace(c.getText(ctrlTokenEdit))
+	c.cfg.InstallDir = expandPath(c.installEntry.Text)
+	c.cfg.VRChatLogDir = expandPath(c.logEntry.Text)
+	c.cfg.PushoverUser = strings.TrimSpace(c.userEntry.Text)
+	c.cfg.PushoverToken = strings.TrimSpace(c.tokenEntry.Text)
 	if err := c.cfg.Save(); err != nil {
 		return err
 	}
@@ -421,13 +404,12 @@ func (c *Controller) startMonitoring() {
 	c.monitor = NewLogMonitor(c.cfg, c.logger, c.eventCh)
 	c.monitor.Start()
 	c.session.Reset("Monitoring VRChat logs...")
-	c.setLabel(ctrlMonitorLabel, "Running")
+	c.monitorLabel.SetText("Running")
 	c.setStatus("Monitoring VRChat logs...")
 	if c.logger != nil {
 		c.logger.Log("Monitoring started.")
 	}
 	c.updateMonitoringButtons()
-	c.updateTray()
 }
 
 func (c *Controller) stopMonitoring() {
@@ -437,16 +419,15 @@ func (c *Controller) stopMonitoring() {
 	c.monitor.Stop()
 	c.monitor = nil
 	c.session.Reset("Monitoring stopped by user.")
-	c.setLabel(ctrlMonitorLabel, "Stopped")
+	c.monitorLabel.SetText("Stopped")
 	c.setStatus("Monitoring stopped.")
-	c.setLabel(ctrlCurrentLog, "(none)")
-	c.setLabel(ctrlSessionLabel, "No active session")
-	c.setLabel(ctrlLastEvent, "")
+	c.currentLogLabel.SetText("(none)")
+	c.sessionLabel.SetText("No active session")
+	c.lastEventLabel.SetText("")
 	if c.logger != nil {
 		c.logger.Log("Monitoring stopped.")
 	}
 	c.updateMonitoringButtons()
-	c.updateTray()
 }
 
 func (c *Controller) restartMonitoring() {
@@ -464,47 +445,7 @@ func (c *Controller) restartMonitoring() {
 }
 
 func (c *Controller) setStatus(text string) {
-	c.setLabel(ctrlStatusLabel, text)
-}
-
-func (c *Controller) setLabel(id uint16, text string) {
-	if hwnd, ok := c.controls[id]; ok {
-		setWindowText(hwnd, text)
-	}
-}
-
-func (c *Controller) getText(id uint16) string {
-	if hwnd, ok := c.controls[id]; ok {
-		return strings.TrimSpace(getWindowText(hwnd))
-	}
-	return ""
-}
-
-func (c *Controller) updateTray() {
-	if c.tray == nil {
-		return
-	}
-	monitoring := c.monitor != nil
-	summary := c.session.Summary()
-	tooltip := AppName
-	if monitoring {
-		tooltip = AppName + " - Monitoring"
-	} else {
-		tooltip = AppName + " - Stopped"
-	}
-	if summary != "" {
-		tooltip += "\n" + summary
-	}
-	_ = c.tray.setTooltip(tooltip)
-	c.tray.setMonitoring(monitoring)
-}
-
-func (c *Controller) showWindow() {
-	showWindow(c.hwnd)
-}
-
-func (c *Controller) hideWindow() {
-	hideWindow(c.hwnd)
+	c.statusLabel.SetText(text)
 }
 
 func (c *Controller) requestQuit() {
@@ -513,13 +454,19 @@ func (c *Controller) requestQuit() {
 	}
 	c.quitting = true
 	c.stopMonitoring()
-	destroyWindow(c.hwnd)
+	c.window.Close()
+	c.app.Quit()
 }
 
 func (c *Controller) updateMonitoringButtons() {
 	running := c.monitor != nil
-	c.setControlEnabled(cmdStart, !running)
-	c.setControlEnabled(cmdStop, running)
+	if running {
+		c.startButton.Disable()
+		c.stopButton.Enable()
+	} else {
+		c.startButton.Enable()
+		c.stopButton.Disable()
+	}
 }
 
 func (c *Controller) updateStartupButtons() {
@@ -531,13 +478,12 @@ func (c *Controller) updateStartupButtons() {
 		c.setStatus(fmt.Sprintf("Failed to query startup entry: %v", err))
 		return
 	}
-	c.setControlEnabled(cmdAddStartup, !exists)
-	c.setControlEnabled(cmdRemoveStartup, exists)
-}
-
-func (c *Controller) setControlEnabled(id uint16, enabled bool) {
-	if hwnd, ok := c.controls[id]; ok {
-		enableWindow(hwnd, enabled)
+	if exists {
+		c.addStartupButton.Disable()
+		c.removeStartupButton.Enable()
+	} else {
+		c.addStartupButton.Enable()
+		c.removeStartupButton.Disable()
 	}
 }
 
@@ -596,7 +542,7 @@ func (c *Controller) handleStartupError(action string, err error) {
 func startupEntryExists() (bool, error) {
 	key, err := regOpenKey(hkeyCurrentUser, startupRegistryPath, keyQueryValue)
 	if err != nil {
-		if err == errFileNotFound {
+		if errors.Is(err, errFileNotFound) {
 			return false, nil
 		}
 		return false, err
@@ -617,64 +563,13 @@ func setStartupEntry(command string) error {
 func removeStartupEntry() error {
 	key, err := regOpenKey(hkeyCurrentUser, startupRegistryPath, keySetValue)
 	if err != nil {
-		if err == errFileNotFound {
+		if errors.Is(err, errFileNotFound) {
 			return nil
 		}
 		return err
 	}
 	defer regCloseKey(key)
 	return regDeleteValue(key, AppName)
-}
-
-func wndProc(hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) uintptr {
-	if activeController != nil && activeController.hwnd == hwnd {
-		return activeController.handleMessage(msg, wparam, lparam)
-	}
-	if msg == wmDestroy {
-		postQuitMessage(0)
-		return 0
-	}
-	return defWindowProc(hwnd, msg, wparam, lparam)
-}
-
-func (c *Controller) handleMessage(msg uint32, wparam, lparam uintptr) uintptr {
-	switch msg {
-	case wmCommand:
-		id := uint16(wparam & 0xFFFF)
-		c.handleCommand(id)
-		return 0
-	case wmTrayMessage:
-		switch lparam {
-		case 0x0202: // WM_LBUTTONUP
-			c.showWindow()
-		case 0x0205: // WM_RBUTTONUP
-			c.showTrayMenu()
-		}
-		return 0
-	case wmEventNotify:
-		events := c.drainEvents()
-		for _, ev := range events {
-			c.handleEvent(ev)
-		}
-		return 0
-	case wmClose:
-		if !c.quitting {
-			c.hideWindow()
-			return 0
-		}
-	case wmDestroy:
-		activeController = nil
-		postQuitMessage(0)
-		return 0
-	}
-	return defWindowProc(c.hwnd, msg, wparam, lparam)
-}
-
-func (c *Controller) showTrayMenu() {
-	if c.tray == nil {
-		return
-	}
-	c.tray.showMenu()
 }
 
 // locateNotificationIcon searches common paths for notification.ico.
@@ -703,87 +598,4 @@ func locateNotificationIcon() string {
 
 func osExecutable() (string, error) {
 	return os.Executable()
-}
-
-type trayIcon struct {
-	hwnd       syscall.Handle
-	icon       syscall.Handle
-	menu       syscall.Handle
-	added      bool
-	monitoring bool
-}
-
-func newTrayIcon(hwnd syscall.Handle, icon syscall.Handle) (*trayIcon, error) {
-	t := &trayIcon{hwnd: hwnd, icon: icon}
-	menu := makeMenu()
-	appendMenu(menu, mfString, trayCmdOpen, "Open Settings")
-	appendMenu(menu, mfString, trayCmdStart, "Start Monitoring")
-	appendMenu(menu, mfString, trayCmdRestart, "Restart Monitoring")
-	appendMenu(menu, mfString, trayCmdStop, "Stop Monitoring")
-	appendMenu(menu, mfSeparator, 0, "")
-	appendMenu(menu, mfString, trayCmdQuit, "Quit")
-	t.menu = menu
-	if err := t.setTooltip(AppName); err != nil {
-		return nil, err
-	}
-	return t, nil
-}
-
-func (t *trayIcon) setMonitoring(active bool) {
-	t.monitoring = active
-}
-
-func (t *trayIcon) setTooltip(text string) error {
-	var data notifyIconData
-	data.HWnd = t.hwnd
-	data.ID = 1
-	data.Flags = nifMessage | nifIcon | nifTip
-	data.CallbackMsg = wmTrayMessage
-	data.HIcon = t.icon
-	copyUTF16(data.Tip[:], text)
-	if !t.added {
-		if err := shellNotifyIcon(nidAdd, &data); err != nil {
-			return err
-		}
-		data.TimeoutOrVersion = 4
-		_ = shellNotifyIcon(0x00000004, &data)
-		t.added = true
-	} else {
-		if err := shellNotifyIcon(nidModify, &data); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (t *trayIcon) showMenu() {
-	if t.menu == 0 {
-		return
-	}
-	p, ok := getCursorPos()
-	if !ok {
-		return
-	}
-	trackPopupMenu(t.menu, 0x0000|0x0002, p.X, p.Y, t.hwnd)
-}
-
-func (t *trayIcon) dispose() {
-	if t.added {
-		var data notifyIconData
-		data.HWnd = t.hwnd
-		data.ID = 1
-		_ = shellNotifyIcon(nidDelete, &data)
-		t.added = false
-	}
-}
-
-func copyUTF16(dest []uint16, text string) {
-	runes := syscall.StringToUTF16(text)
-	max := len(dest)
-	for i := 0; i < max && i < len(runes)-1; i++ {
-		dest[i] = runes[i]
-	}
-	if max > 0 {
-		dest[max-1] = 0
-	}
 }
