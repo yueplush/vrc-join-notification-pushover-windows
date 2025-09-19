@@ -13,7 +13,7 @@ try {
 
     & $PyInstaller `
         --noconsole `
-        --name "VRChatJoinNotifierPy" `
+        --name "VRChatJoinNotificationWithPushover" `
         --icon $iconPath `
         --add-data $dataArg `
         $entryPoint

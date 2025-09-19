@@ -70,7 +70,7 @@ Bundle the Python build into a single-file `.exe` when you want to redistribute 
 ```powershell
 # With the virtual environment still active
 python -m pip install pyinstaller
-pyinstaller --noconsole --name VRChatJoinNotifierPy `
+pyinstaller --noconsole --name VRChatJoinNotificationWithPushover `
   --icon src/vrchat_join_notification/notification.ico `
   --add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification" `
   src/vrchat_join_notification/app.py
@@ -87,9 +87,9 @@ pyinstaller --noconsole --name VRChatJoinNotifierPy `
   .\tools\build-windows-exe.ps1
   ```
 
-- The build produces `dist/VRChatJoinNotifierPy/VRChatJoinNotifierPy.exe`.
+- The build produces `dist/VRChatJoinNotificationWithPushover/VRChatJoinNotificationWithPushover.exe`.
 - The executable runs standalone, but Microsoft Defender SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.
-- If you want to customise the build, generate a template first (`pyinstaller --name ... --onefile --icon ... --add-data ... --specpath buildspec`) and then run `pyinstaller buildspec/VRChatJoinNotifierPy.spec`.
+- If you want to customise the build, generate a template first (`pyinstaller --name ... --onefile --icon ... --add-data ... --specpath buildspec`) and then run `pyinstaller buildspec/VRChatJoinNotificationWithPushover.spec`.
 
 > PyInstaller uses `;` to separate `--add-data` entries on Windows (Linux/macOS use `:`).
 
