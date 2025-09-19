@@ -1,6 +1,6 @@
 # VRChat Join Notification with Pushover
 
-Cross-platform helper that watches VRChat logs and sends desktop and optional Pushover alerts when friends join. Windows ships as PowerShell; Linux installs as a Python app with a Tk GUI.
+Cross-platform helper that watches VRChat logs and sends desktop and optional Pushover alerts when friends join. Windows ships as a Go CLI that emits Windows toast notifications; Linux installs as a Python app with a Tk GUI.
 
 ## Features
 - Tracks the newest `output_log_*.txt` / `Player.log` and follows roll-overs automatically.
@@ -11,9 +11,10 @@ Cross-platform helper that watches VRChat logs and sends desktop and optional Pu
 ## Repository layout
 | Path | Description |
 | --- | --- |
-| `src/vrchat-join-notification-with-pushover.ps1` | Windows PowerShell implementation. |
+| `cmd/vrchat-join-notification-with-pushover/` | Windows Go implementation. |
 | `src/vrchat-join-notification-with-pushover_linux.py` | Legacy shim that calls the packaged Linux app. |
 | `src/vrchat_join_notification/` | Installable Python package with the Linux GUI and notifier logic. |
+| `go.mod` | Module definition for the Windows build. |
 
 ---
 
@@ -27,21 +28,28 @@ cd vrchat-join-notification-with-pushover
 
 ---
 
-## Windows quick start (PowerShell)
-1. Install the `ps2exe` module if you plan to build a standalone executable:
+## Windows quick start (Go CLI)
+1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**.
+2. Clone the repository and build the executable:
    ```powershell
-   Install-Module -Name ps2exe -Scope CurrentUser
+   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+   cd vrchat-join-notification-with-pushover
+   go build -o .\vrchat-join-notification-with-pushover.exe .\cmd\vrchat-join-notification-with-pushover
    ```
-   If you only want to test, run the script directly:
+   > Building from another platform? Cross-compile with:
+   > ```bash
+   > GOOS=windows GOARCH=amd64 go build -o vrchat-join-notification-with-pushover.exe ./cmd/vrchat-join-notification-with-pushover
+   > ```
+3. Run the interactive configuration once to set the install/cache directory, VRChat log folder, and optional Pushover keys:
    ```powershell
-   .\src\vrchat-join-notification-with-pushover.ps1
+   .\vrchat-join-notification-with-pushover.exe -configure
    ```
-2. Or build an `.exe`:
+   Settings are stored in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover\config.json`. Logs are written to `notifier.log` in the same folder.
+4. Start monitoring:
    ```powershell
-   Invoke-ps2exe -InputFile .\src\vrchat-join-notification-with-pushover.ps1 -OutputFile .\vrchat-join-notification-with-pushover.exe `
-     -Title 'VRChat Join Notification with Pushover' -IconFile .\src\vrchat_join_notification\notification.ico -NoConsole -STA -x64
+   .\vrchat-join-notification-with-pushover.exe
    ```
-3. Configure the install/cache folder, VRChat log directory, and optional Pushover credentials from **Settings**. Toggle “Hide window on launch” if you prefer the tray immediately.
+   Windows toast notifications mirror the Linux behaviour and an optional Pushover push is sent when both token and user key are configured. Re-run with `-configure` whenever you need to update paths or credentials.
 
 ---
 
