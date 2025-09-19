@@ -70,13 +70,22 @@ Bundle the Python build into a single-file `.exe` when you want to redistribute 
 ```powershell
 # With the virtual environment still active
 python -m pip install pyinstaller
-pyinstaller ^
-  --noconsole ^
-  --name VRChatJoinNotifierPy ^
-  --icon src/vrchat_join_notification/notification.ico ^
-  --add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification" ^
+pyinstaller --noconsole --name VRChatJoinNotifierPy `
+  --icon src/vrchat_join_notification/notification.ico `
+  --add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification" `
   src/vrchat_join_notification/app.py
 ```
+
+- PowerShell uses the backtick (`` ` ``) for line continuations. If you are running
+  the command from **Command Prompt**, replace each trailing backtick with a caret
+  (`^`).
+- Prefer to avoid manual copy/paste? Run the helper script instead:
+
+  ```powershell
+  # Still inside the virtual environment
+  python -m pip install pyinstaller
+  .\tools\build-windows-exe.ps1
+  ```
 
 - The build produces `dist/VRChatJoinNotifierPy/VRChatJoinNotifierPy.exe`.
 - The executable runs standalone, but Microsoft Defender SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.
