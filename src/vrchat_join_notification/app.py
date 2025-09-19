@@ -69,6 +69,7 @@ SESSION_FALLBACK_GRACE_SECONDS = 30
 SESSION_FALLBACK_MAX_CONTINUATION_SECONDS = 4
 ICON_FILE_NAME = "notification.ico"
 AUTOSTART_FILE_NAME = "vrchat-join-notifier.desktop"
+WINDOWS_AUTOSTART_SCRIPT_NAME = "VRChat Join Notification with Pushover.vbs"
 UNICODE_DASHES = "\u2013\u2014"
 JOIN_SEPARATOR_CHARS = ":|-" + UNICODE_DASHES
 JOIN_SEPARATOR_PATTERN = "[-:|" + UNICODE_DASHES + "]+"
@@ -134,6 +135,22 @@ def _windows_local_appdata() -> str:
     return _expand_path(fallback)
 
 
+def _windows_roaming_appdata() -> str:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return _expand_path(appdata)
+    profile = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    fallback = os.path.join(profile, "AppData", "Roaming")
+    return _expand_path(fallback)
+
+
+def _windows_startup_dir() -> str:
+    base = os.path.join(
+        _windows_roaming_appdata(), "Microsoft", "Windows", "Start Menu", "Programs", "Startup"
+    )
+    return _expand_path(base)
+
+
 def _windows_locallow_dir() -> str:
     candidates = []
     local_appdata = os.environ.get("LOCALAPPDATA")
@@ -148,6 +165,14 @@ def _windows_locallow_dir() -> str:
         if os.path.isdir(expanded):
             return expanded
     return _expand_path(candidates[0])
+
+
+def _windows_startup_script_path() -> str:
+    return os.path.join(_windows_startup_dir(), WINDOWS_AUTOSTART_SCRIPT_NAME)
+
+
+def _escape_vbs_string(value: str) -> str:
+    return value.replace("\"", "\"\"")
 
 
 def _guess_vrchat_log_dir() -> str:
@@ -2133,8 +2158,7 @@ class AppController:
             if not args:
                 raise RuntimeError("Unable to determine launch command.")
             if os.name == "nt":
-                self._add_to_startup_windows(args)
-                entry_description = r"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+                entry_description = self._add_to_startup_windows(args, workdir)
             else:
                 entry_description = self._add_to_startup_unix(args, workdir)
         except Exception as exc:
@@ -2357,21 +2381,33 @@ class AppController:
             handle.write("\n".join(lines) + "\n")
         return entry_path
 
-    def _add_to_startup_windows(self, args: List[str]) -> None:
+    def _add_to_startup_windows(self, args: List[str], workdir: Optional[str]) -> str:
         command = self._format_exec_command(args)
+        script_path = _windows_startup_script_path()
+        os.makedirs(os.path.dirname(script_path), exist_ok=True)
+        # Remove any legacy Run key entry so that only the startup script is used.
+        self._remove_windows_run_key_entry()
+        vbs_lines = [
+            'Set shell = CreateObject("WScript.Shell")',
+        ]
+        working_directory = workdir
+        if not working_directory and args:
+            candidate = os.path.abspath(args[0])
+            if os.path.exists(candidate):
+                working_directory = os.path.dirname(candidate)
+        if working_directory:
+            vbs_lines.append(
+                f'shell.CurrentDirectory = "{_escape_vbs_string(os.path.abspath(working_directory))}"'
+            )
+        vbs_lines.append(f'shell.Run "{_escape_vbs_string(command)}", 0, False')
+        vbs_lines.append("Set shell = Nothing")
+        data = "\r\n".join(vbs_lines) + "\r\n"
         try:
-            import winreg  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover - defensive
-            raise RuntimeError("winreg module is unavailable") from exc
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        try:
-            key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-            try:
-                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
-            finally:
-                winreg.CloseKey(key)
+            with open(script_path, "w", encoding="utf-8-sig") as handle:
+                handle.write(data)
         except OSError as exc:
-            raise RuntimeError(f"Unable to update registry: {exc}")
+            raise RuntimeError(f"Unable to write startup script: {exc}") from exc
+        return script_path
 
     def _remove_from_startup_unix(self) -> str:
         entry_path = self._autostart_entry_path()
@@ -2380,44 +2416,71 @@ class AppController:
         return entry_path
 
     def _remove_from_startup_windows(self) -> str:
+        script_path = _windows_startup_script_path()
+        removed_items: List[str] = []
+        try:
+            os.remove(script_path)
+            removed_items.append(script_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RuntimeError(f"Unable to remove startup script: {exc}") from exc
+
+        if self._remove_windows_run_key_entry():
+            removed_items.append(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run")
+
+        if removed_items:
+            return "; ".join(removed_items)
+        return script_path
+
+    def _remove_windows_run_key_entry(self) -> bool:
         try:
             import winreg  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover - defensive
-            raise RuntimeError("winreg module is unavailable") from exc
+        except Exception:
+            return False
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
         except FileNotFoundError:
-            return r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
+            return False
         try:
-            try:
-                winreg.DeleteValue(key, APP_NAME)
-            except FileNotFoundError:
-                pass
+            winreg.DeleteValue(key, APP_NAME)
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
         finally:
             winreg.CloseKey(key)
-        return r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
+
+    def _windows_run_key_has_entry(self) -> bool:
+        try:
+            import winreg  # type: ignore[import-not-found]
+        except Exception:
+            return False
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+        except FileNotFoundError:
+            return False
+        try:
+            value, _ = winreg.QueryValueEx(key, APP_NAME)
+            return bool(value)
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
+        finally:
+            winreg.CloseKey(key)
 
     def _autostart_entry_exists(self) -> bool:
         if os.name == "nt":
             try:
-                import winreg  # type: ignore[import-not-found]
+                if os.path.exists(_windows_startup_script_path()):
+                    return True
             except Exception:
-                return False
-            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            try:
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
-            except FileNotFoundError:
-                return False
-            try:
-                value, _ = winreg.QueryValueEx(key, APP_NAME)
-                return bool(value)
-            except FileNotFoundError:
-                return False
-            except OSError:
-                return False
-            finally:
-                winreg.CloseKey(key)
+                pass
+            return self._windows_run_key_has_entry()
         try:
             return os.path.exists(self._autostart_entry_path())
         except Exception:
