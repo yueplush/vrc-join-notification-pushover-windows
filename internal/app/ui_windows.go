@@ -126,11 +126,21 @@ func (c *Controller) consumeEvents() {
 		c.eventMu.Lock()
 		c.eventQueue = append(c.eventQueue, ev)
 		c.eventMu.Unlock()
-		if drv := c.app.Driver(); drv != nil {
-			drv.RunOnMain(func() {
+		if runner, ok := any(c.app).(interface{ RunOnMain(func()) }); ok {
+			runner.RunOnMain(func() {
 				c.flushEvents()
 			})
+			continue
 		}
+		if drv := c.app.Driver(); drv != nil {
+			if runner, ok := any(drv).(interface{ RunOnMain(func()) }); ok {
+				runner.RunOnMain(func() {
+					c.flushEvents()
+				})
+				continue
+			}
+		}
+		c.flushEvents()
 	}
 }
 
