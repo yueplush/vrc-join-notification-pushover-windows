@@ -1,6 +1,6 @@
 # VRChat Join Notification with Pushover
 
-Resident desktop companion that watches your VRChat logs and pings you on the desktop (and optionally through Pushover) whenever a friend joins your instance. The original release ships a Python/Tkinter GUI, and the repository now additionally contains a native Go-based tray companion for Windows with a self-contained settings window.
+Resident desktop companion that watches your VRChat logs and pings you on the desktop (and optionally through Pushover) whenever a friend joins your instance. The original release ships a Python/Tkinter GUI, and the repository now additionally contains a native Go companion for Windows powered by a Fyne v2 settings window.
 
 ## Highlights
 - Tracks VRChat sessions safely, suppressing duplicates and ignoring your own joins.
@@ -11,12 +11,13 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
 
 ### Windows native tray companion (Go)
 
-Prefer a small self-contained `.exe` with a built-in settings UI and task-tray controls? Compile the Go implementation that lives in `cmd/vrchat-notifier`.
+Prefer a small self-contained `.exe` with a built-in settings UI that mirrors the desktop companion screenshot above? Compile the Go implementation that lives in `cmd/vrchat-notifier` – it now ships with a Fyne v2 interface tailored for Windows.
 
 **Prerequisites**
 
 - Windows 10/11.
 - [Go 1.21 or newer](https://go.dev/dl/).
+- A C toolchain required by [Fyne](https://docs.fyne.io/started/) (for example the **MSYS2 UCRT64** toolchain: install MSYS2 via `winget install -e --id MSYS2.MSYS2`, start the "MSYS2 UCRT64" shell, then run `pacman -Syu` followed by `pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf`).
 
 **Build & run**
 
@@ -25,17 +26,23 @@ Prefer a small self-contained `.exe` with a built-in settings UI and task-tray c
    git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
    Set-Location vrchat-join-notification-with-pushover
    ```
-2. **Compile the tray application**
+2. **Fetch dependencies**
+   ```powershell
+   go mod tidy
+   ```
+   (This downloads the Fyne v2 GUI toolkit.)
+
+3. **Compile the application**
    ```powershell
    go build -o bin/vrchat-notifier.exe ./cmd/vrchat-notifier
    ```
    The build embeds no external assets – just ensure `notification.ico` sits next to the executable (it is already present in the repository root).
-3. **Launch the watcher**
+4. **Launch the watcher**
    ```powershell
    .\bin\vrchat-notifier.exe
    ```
 
-The Go binary stores configuration files in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover`, mirroring the Python application's layout. A system-tray icon exposes quick commands (Open Settings, Start/Stop/Restart Monitoring and Quit) and the window may be re-opened at any time from the tray. Desktop notifications and Pushover integration behave just like the original implementation.
+The Go binary stores configuration files in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover`, mirroring the Python application's layout. The new Fyne window presents the same controls as the Python companion – path pickers, monitoring buttons, startup management and live status indicators – with button groupings that match the reference screenshot. Desktop notifications and Pushover integration behave just like the original implementation.
 
 ### Windows (PowerShell)
 
