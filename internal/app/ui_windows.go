@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
@@ -26,6 +28,12 @@ const (
 
 	startupRegistryPath        = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 	startupRegistryDescription = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+
+	trayMenuOpenSettingsID uint16 = 1
+	trayMenuStartID        uint16 = 2
+	trayMenuStopID         uint16 = 3
+	trayMenuResetID        uint16 = 4
+	trayMenuExitID         uint16 = 5
 )
 
 // Controller owns the application window, widgets and background workers.
@@ -66,6 +74,16 @@ type Controller struct {
 
 	loadNotice string
 	quitting   bool
+
+	tray *SystemTray
+
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
+
+	windowStateMu   sync.Mutex
+	windowHandle    syscall.Handle
+	windowMinimized bool
 }
 
 // NewController constructs the Fyne based GUI controller.
@@ -79,6 +97,7 @@ func NewController(cfg *AppConfig, loadNotice string, logger *AppLogger) (*Contr
 		eventCh:    make(chan MonitorEvent, 64),
 		eventDone:  make(chan struct{}),
 		loadNotice: loadNotice,
+		stopCh:     make(chan struct{}),
 	}
 	controller.session = NewSessionTracker(controller.notifier, controller.pushover, controller.logger)
 
@@ -102,6 +121,8 @@ func NewController(cfg *AppConfig, loadNotice string, logger *AppLogger) (*Contr
 		}
 	}
 
+	controller.initSystemTray(iconPath)
+
 	go controller.consumeEvents()
 	return controller, nil
 }
@@ -114,8 +135,26 @@ func (c *Controller) Run() error {
 	return nil
 }
 
+func (c *Controller) runOnMain(fn func()) {
+	if fn == nil {
+		return
+	}
+	if runner, ok := any(c.app).(interface{ RunOnMain(func()) }); ok {
+		runner.RunOnMain(fn)
+		return
+	}
+	if drv := c.app.Driver(); drv != nil {
+		if runner, ok := any(drv).(interface{ RunOnMain(func()) }); ok {
+			runner.RunOnMain(fn)
+			return
+		}
+	}
+	fn()
+}
+
 func (c *Controller) cleanup() {
 	c.stopMonitoring()
+	c.shutdownTray()
 	close(c.eventCh)
 	<-c.eventDone
 }
@@ -126,21 +165,9 @@ func (c *Controller) consumeEvents() {
 		c.eventMu.Lock()
 		c.eventQueue = append(c.eventQueue, ev)
 		c.eventMu.Unlock()
-		if runner, ok := any(c.app).(interface{ RunOnMain(func()) }); ok {
-			runner.RunOnMain(func() {
-				c.flushEvents()
-			})
-			continue
-		}
-		if drv := c.app.Driver(); drv != nil {
-			if runner, ok := any(drv).(interface{ RunOnMain(func()) }); ok {
-				runner.RunOnMain(func() {
-					c.flushEvents()
-				})
-				continue
-			}
-		}
-		c.flushEvents()
+		c.runOnMain(func() {
+			c.flushEvents()
+		})
 	}
 }
 
@@ -580,6 +607,130 @@ func removeStartupEntry() error {
 	}
 	defer regCloseKey(key)
 	return regDeleteValue(key, AppName)
+}
+
+func (c *Controller) initSystemTray(iconPath string) {
+	if c.tray != nil {
+		return
+	}
+	items := []TrayMenuItem{
+		{ID: trayMenuOpenSettingsID, Title: "Open Settings", Action: c.openSettingsFromTray},
+		{ID: trayMenuStartID, Title: "Start Monitoring", Action: c.startMonitoringFromTray},
+		{ID: trayMenuStopID, Title: "Stop Monitoring", Action: c.stopMonitoringFromTray},
+		{ID: trayMenuResetID, Title: "Reset Monitoring", Action: c.resetMonitoringFromTray},
+		{ID: trayMenuExitID, Title: "Exit", Action: c.exitFromTray},
+	}
+	tray, err := NewSystemTray(iconPath, AppName, c.openSettingsFromTray, items)
+	if err != nil {
+		if c.logger != nil {
+			c.logger.Logf("Failed to initialise system tray: %v", err)
+		}
+		return
+	}
+	c.tray = tray
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.watchWindowMinimise()
+	}()
+}
+
+func (c *Controller) shutdownTray() {
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+	})
+	c.wg.Wait()
+	if c.tray != nil {
+		c.tray.Close()
+		c.tray = nil
+	}
+}
+
+func (c *Controller) watchWindowMinimise() {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+		}
+		hwnd := c.getWindowHandle()
+		if hwnd == 0 {
+			hwnd = findWindowByTitle(AppName)
+			if hwnd != 0 {
+				c.setWindowHandle(hwnd)
+			}
+			continue
+		}
+		if !isWindowHandleValid(hwnd) {
+			c.setWindowHandle(0)
+			continue
+		}
+		if isWindowIconic(hwnd) {
+			if c.setWindowMinimized(true) {
+				c.runOnMain(func() {
+					c.window.Hide()
+				})
+			}
+			continue
+		}
+		c.setWindowMinimized(false)
+	}
+}
+
+func (c *Controller) setWindowHandle(hwnd syscall.Handle) {
+	c.windowStateMu.Lock()
+	c.windowHandle = hwnd
+	c.windowStateMu.Unlock()
+}
+
+func (c *Controller) getWindowHandle() syscall.Handle {
+	c.windowStateMu.Lock()
+	defer c.windowStateMu.Unlock()
+	return c.windowHandle
+}
+
+func (c *Controller) setWindowMinimized(min bool) bool {
+	c.windowStateMu.Lock()
+	changed := c.windowMinimized != min
+	c.windowMinimized = min
+	c.windowStateMu.Unlock()
+	return changed
+}
+
+func (c *Controller) openSettingsFromTray() {
+	c.runOnMain(func() {
+		c.window.Show()
+		if hwnd := c.getWindowHandle(); hwnd != 0 {
+			restoreWindow(hwnd)
+		}
+	})
+	c.setWindowMinimized(false)
+}
+
+func (c *Controller) startMonitoringFromTray() {
+	c.runOnMain(func() {
+		c.startMonitoring()
+	})
+}
+
+func (c *Controller) stopMonitoringFromTray() {
+	c.runOnMain(func() {
+		c.stopMonitoring()
+	})
+}
+
+func (c *Controller) resetMonitoringFromTray() {
+	c.runOnMain(func() {
+		c.restartMonitoring()
+	})
+}
+
+func (c *Controller) exitFromTray() {
+	c.runOnMain(func() {
+		c.requestQuit()
+	})
 }
 
 // locateNotificationIcon searches common paths for notification.ico.

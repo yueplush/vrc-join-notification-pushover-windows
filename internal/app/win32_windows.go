@@ -4,6 +4,7 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -47,6 +48,9 @@ var (
 	procGetStockObject     = modGdi32.NewProc("GetStockObject")
 	procPostMessage        = modUser32.NewProc("PostMessageW")
 	procMessageBox         = modUser32.NewProc("MessageBoxW")
+	procFindWindow         = modUser32.NewProc("FindWindowW")
+	procIsIconic           = modUser32.NewProc("IsIconic")
+	procIsWindow           = modUser32.NewProc("IsWindow")
 	procCreateMutex        = modKernel32.NewProc("CreateMutexW")
 	procReleaseMutex       = modKernel32.NewProc("ReleaseMutex")
 	procCloseHandle        = modKernel32.NewProc("CloseHandle")
@@ -69,20 +73,28 @@ const (
 
 	cwUseDefault = 0x80000000
 
-	wmDestroy = 0x0002
-	wmClose   = 0x0010
-	wmCommand = 0x0111
-	wmApp     = 0x8000
-	wmUser    = 0x0400
-	wmSetFont = 0x0030
+	wmDestroy       = 0x0002
+	wmClose         = 0x0010
+	wmCommand       = 0x0111
+	wmContextMenu   = 0x007B
+	wmRButtonUp     = 0x0205
+	wmLButtonDblClk = 0x0203
+	wmApp           = 0x8000
+	wmUser          = 0x0400
+	wmSetFont       = 0x0030
 
-	swShow = 5
+	swShow    = 5
+	swRestore = 9
 
 	bsPushButton  = 0x00000000
 	esAutoHScroll = 0x0004
 
 	mfString    = 0x00000000
 	mfSeparator = 0x00000800
+
+	tpmLeftAlign   = 0x0000
+	tpmRightButton = 0x0002
+	tpmBottomAlign = 0x0020
 
 	niifInfo   = 0x00000001
 	nifMessage = 0x00000001
@@ -280,6 +292,33 @@ func moveWindow(hwnd syscall.Handle, x, y, cx, cy int32, repaint bool) {
 		repaintFlag = 1
 	}
 	procMoveWindow.Call(uintptr(hwnd), uintptr(x), uintptr(y), uintptr(cx), uintptr(cy), repaintFlag)
+}
+
+func restoreWindow(hwnd syscall.Handle) {
+	if hwnd == 0 {
+		return
+	}
+	procShowWindow.Call(uintptr(hwnd), swRestore)
+	procSetForegroundWnd.Call(uintptr(hwnd))
+}
+
+func findWindowByTitle(title string) syscall.Handle {
+	if strings.TrimSpace(title) == "" {
+		return 0
+	}
+	ptr, _ := syscall.UTF16PtrFromString(title)
+	hwnd, _, _ := procFindWindow.Call(0, uintptr(unsafe.Pointer(ptr)))
+	return syscall.Handle(hwnd)
+}
+
+func isWindowHandleValid(hwnd syscall.Handle) bool {
+	ret, _, _ := procIsWindow.Call(uintptr(hwnd))
+	return ret != 0
+}
+
+func isWindowIconic(hwnd syscall.Handle) bool {
+	ret, _, _ := procIsIconic.Call(uintptr(hwnd))
+	return ret != 0
 }
 
 func getClientRect(hwnd syscall.Handle) rect {
