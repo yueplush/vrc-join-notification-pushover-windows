@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from importlib import resources
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import tkinter as tk
@@ -82,6 +83,44 @@ def _windows_hide_window_kwargs() -> Dict[str, Any]:
         kwargs["creationflags"] = creationflags
 
     return kwargs
+
+
+def _locate_icon_file() -> Optional[str]:
+    """Locate the tray icon file on disk if possible."""
+
+    search_roots: List[Path] = []
+    try:
+        script_path = Path(__file__).resolve()
+    except OSError:
+        script_path = None
+    if script_path is not None:
+        search_roots.append(script_path.with_name(ICON_FILE_NAME))
+        package_dir = script_path.parent
+        search_roots.append(package_dir / ICON_FILE_NAME)
+    cwd = Path.cwd()
+    search_roots.append(cwd / ICON_FILE_NAME)
+    search_roots.append(cwd / "vrchat_join_notification" / ICON_FILE_NAME)
+
+    for candidate in search_roots:
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except OSError:
+            continue
+
+    try:
+        if hasattr(resources, "files"):
+            icon = resources.files(__package__ or "vrchat_join_notification") / ICON_FILE_NAME  # type: ignore[attr-defined]
+            with resources.as_file(icon) as handle:  # type: ignore[attr-defined]
+                if handle.exists():
+                    return os.fspath(handle)
+        else:
+            with resources.path(__package__ or "vrchat_join_notification", ICON_FILE_NAME) as handle:  # type: ignore[attr-defined]
+                return os.fspath(handle)
+    except (FileNotFoundError, ModuleNotFoundError, AttributeError, TypeError):
+        return None
+
+    return None
 
 
 def _default_storage_root() -> str:
@@ -963,14 +1002,27 @@ class TrayIconController:
         self._active = False
         self._tooltip = APP_NAME
         self.disabled_reason: Optional[str] = None
+        self._native: Optional["_WindowsNativeTrayIcon"] = None
+        if not self.available and os.name == "nt":
+            try:
+                self._native = _WindowsNativeTrayIcon(self, logger)
+            except Exception as exc:
+                message = str(exc).strip() or "failed to initialise native tray backend."
+                self.disabled_reason = message
+                self.available = False
+            else:
+                self.available = True
         if not self.available:
-            self.disabled_reason = "install 'pystray' and 'Pillow' to enable it."
+            self.disabled_reason = self.disabled_reason or "install 'pystray' and 'Pillow' to enable it."
 
     def start(self) -> None:
         if not self.available:
             reason = self.disabled_reason or "install 'pystray' and 'Pillow' to enable it."
             self.disabled_reason = reason
             self.logger.log(f"Tray icon disabled: {reason}")
+            return
+        if self._native is not None:
+            self._native.start()
             return
         if self.icon is not None:
             return
@@ -1000,6 +1052,9 @@ class TrayIconController:
         self._thread.start()
 
     def stop(self) -> None:
+        if self._native is not None:
+            self._native.stop()
+            return
         if self.icon is not None and self._ready.is_set():
             try:
                 self.icon.stop()
@@ -1014,13 +1069,20 @@ class TrayIconController:
     def is_ready(self) -> bool:
         """Return ``True`` if the tray icon is running and ready for updates."""
 
-        return self.available and self._ready.is_set()
+        if not self.available:
+            return False
+        if self._native is not None:
+            return self._native.is_ready()
+        return self._ready.is_set()
 
     def update_state(self, monitoring: bool, tooltip: str) -> None:
         if not self.available:
             return
         self._active = monitoring
         self._tooltip = tooltip
+        if self._native is not None:
+            self._native.update_state(monitoring, tooltip)
+            return
         self._apply_state()
 
     def _run(self) -> None:
@@ -1050,7 +1112,12 @@ class TrayIconController:
             self.icon = None
 
     def _apply_state(self) -> None:
-        if not self.available or self.icon is None or not self._ready.is_set():
+        if not self.available:
+            return
+        if self._native is not None:
+            self._native.apply_state()
+            return
+        if self.icon is None or not self._ready.is_set():
             return
         if self._active and self._icon_active is not None:
             self.icon.icon = self._icon_active
@@ -1181,6 +1248,363 @@ class TrayIconController:
             self.logger.log(f"Tray icon resource missing: '{identifier}'")
             self._base_icon = None
         return self._base_icon
+
+
+class _WindowsNativeTrayIcon:
+    """Minimal Windows tray integration when ``pystray`` is unavailable."""
+
+    _WM_USER = 0x0400
+    _WM_APP = 0x8000
+    _WM_TRAY = _WM_USER + 42
+    _WM_APPLY_STATE = _WM_APP + 1
+
+    _ID_OPEN = 1001
+    _ID_START = 1002
+    _ID_RESTART = 1003
+    _ID_STOP = 1004
+    _ID_QUIT = 1005
+
+    def __init__(self, controller: TrayIconController, logger: AppLogger) -> None:
+        if os.name != "nt":
+            raise RuntimeError("native tray backend is only available on Windows.")
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except Exception as exc:  # pragma: no cover - Windows specific import guard
+            raise RuntimeError(f"ctypes unavailable: {exc}") from exc
+
+        icon_path = _locate_icon_file()
+        if not icon_path:
+            raise RuntimeError("notification.ico not found for tray icon display.")
+
+        self.controller = controller
+        self.logger = logger
+        self._ctypes = ctypes
+        self._wintypes = wintypes
+        self._icon_path = icon_path
+        self._thread: Optional[threading.Thread] = None
+        self._ready = threading.Event()
+        self._stop_event = threading.Event()
+        self._hwnd: Optional[int] = None
+        self._hicon_idle: Optional[int] = None
+        self._hicon_active: Optional[int] = None
+        self._menu: Optional[int] = None
+        self._wndproc = None
+        self._taskbar_msg: Optional[int] = None
+        self._user32 = None
+        self._shell32 = None
+        self._kernel32 = None
+        self._NOTIFYICONDATA = None
+        self._active = False
+        self._tooltip = APP_NAME
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, name="TrayIconWin32", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        hwnd = self._hwnd
+        if hwnd and self._user32 is not None:
+            try:
+                self._user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+            except Exception:
+                pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._thread = None
+        self._ready.clear()
+        self._hwnd = None
+
+    def is_ready(self) -> bool:
+        return self._ready.is_set()
+
+    def update_state(self, monitoring: bool, tooltip: str) -> None:
+        self._active = monitoring
+        self._tooltip = tooltip or APP_NAME
+        self.apply_state()
+
+    def apply_state(self) -> None:
+        hwnd = self._hwnd
+        if not hwnd or self._user32 is None:
+            return
+        try:
+            self._user32.PostMessageW(hwnd, self._WM_APPLY_STATE, 0, 0)
+        except Exception:
+            pass
+
+    # Internal helpers -----------------------------------------------------------------
+
+    def _run(self) -> None:  # pragma: no cover - Windows specific event loop
+        ctypes = self._ctypes
+        wintypes = self._wintypes
+
+        try:
+            user32 = ctypes.windll.user32
+            shell32 = ctypes.windll.shell32
+            kernel32 = ctypes.windll.kernel32
+        except Exception as exc:
+            self.logger.log(f"Tray icon disabled: failed loading Win32 libraries ({exc}).")
+            self._ready.clear()
+            return
+
+        self._user32 = user32
+        self._shell32 = shell32
+        self._kernel32 = kernel32
+
+        class WNDCLASS(ctypes.Structure):
+            _fields_ = [
+                ("style", wintypes.UINT),
+                ("lpfnWndProc", wintypes.WNDPROC),
+                ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HICON),
+                ("hCursor", wintypes.HCURSOR),
+                ("hbrBackground", wintypes.HBRUSH),
+                ("lpszMenuName", wintypes.LPCWSTR),
+                ("lpszClassName", wintypes.LPCWSTR),
+            ]
+
+        WNDPROC = ctypes.WINFUNCTYPE(
+            wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+        )
+
+        @WNDPROC
+        def _wnd_proc(hwnd, msg, wparam, lparam):
+            if msg == self._taskbar_msg:
+                self._add_icon(hwnd)
+                self._apply_state_internal(hwnd)
+                return 0
+            if msg == self._WM_TRAY:
+                if lparam in (0x0202, 0x0203):  # WM_LBUTTONUP/WM_LBUTTONDBLCLK
+                    self.controller._menu_open(None, None)
+                elif lparam == 0x0205:  # WM_RBUTTONUP
+                    self._show_menu(hwnd)
+                return 0
+            if msg == self._WM_APPLY_STATE:
+                self._apply_state_internal(hwnd)
+                return 0
+            if msg == 0x0111:  # WM_COMMAND
+                self._dispatch_command(wparam & 0xFFFF)
+                return 0
+            if msg == 0x0002:  # WM_DESTROY
+                self._remove_icon()
+                user32.PostQuitMessage(0)
+                return 0
+            if msg == 0x0010:  # WM_CLOSE
+                user32.DestroyWindow(hwnd)
+                return 0
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        wndproc = WNDPROC(_wnd_proc)
+        self._wndproc = wndproc
+
+        class_name = "VRCTrayIcon"
+        hinstance = kernel32.GetModuleHandleW(None)
+        wndclass = WNDCLASS()
+        wndclass.style = 0
+        wndclass.lpfnWndProc = wndproc
+        wndclass.cbClsExtra = 0
+        wndclass.cbWndExtra = 0
+        wndclass.hInstance = hinstance
+        wndclass.hIcon = 0
+        wndclass.hCursor = 0
+        wndclass.hbrBackground = 0
+        wndclass.lpszMenuName = None
+        wndclass.lpszClassName = class_name
+
+        atom = user32.RegisterClassW(ctypes.byref(wndclass))
+        if not atom:
+            error = ctypes.WinError()
+            self.logger.log(f"Tray icon disabled: failed registering window class ({error}).")
+            return
+
+        hwnd = user32.CreateWindowExW(
+            0,
+            class_name,
+            class_name,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            hinstance,
+            None,
+        )
+        if not hwnd:
+            error = ctypes.WinError()
+            self.logger.log(f"Tray icon disabled: failed creating window ({error}).")
+            user32.UnregisterClassW(class_name, hinstance)
+            return
+
+        self._hwnd = hwnd
+        self._taskbar_msg = user32.RegisterWindowMessageW("TaskbarCreated")
+        self._menu = self._create_menu()
+        self._load_icons()
+        self._add_icon(hwnd)
+        self._ready.set()
+        self._apply_state_internal(hwnd)
+
+        msg = wintypes.MSG()
+        while not self._stop_event.is_set():
+            result = user32.GetMessageW(ctypes.byref(msg), 0, 0, 0)
+            if result == 0:
+                break
+            if result == -1:
+                break
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+        self._ready.clear()
+        self._remove_icon()
+        if self._menu:
+            user32.DestroyMenu(self._menu)
+            self._menu = None
+        if hwnd:
+            user32.DestroyWindow(hwnd)
+        user32.UnregisterClassW(class_name, hinstance)
+
+    def _load_icons(self) -> None:
+        if self._user32 is None:
+            return
+        flags = 0x00000010 | 0x00000080  # LR_LOADFROMFILE | LR_DEFAULTSIZE
+        self._hicon_idle = self._user32.LoadImageW(None, self._icon_path, 1, 0, 0, flags)
+        self._hicon_active = self._hicon_idle
+
+    def _create_menu(self) -> Optional[int]:
+        if self._user32 is None:
+            return None
+        menu = self._user32.CreatePopupMenu()
+        if not menu:
+            return None
+        append = self._user32.AppendMenuW
+        MF_STRING = 0x00000000
+        MF_SEPARATOR = 0x00000800
+        append(menu, MF_STRING, self._ID_OPEN, "Open Settings")
+        append(menu, MF_STRING, self._ID_START, "Start Monitoring")
+        append(menu, MF_STRING, self._ID_RESTART, "Restart Monitoring")
+        append(menu, MF_STRING, self._ID_STOP, "Stop Monitoring")
+        append(menu, MF_SEPARATOR, 0, None)
+        append(menu, MF_STRING, self._ID_QUIT, "Quit")
+        return menu
+
+    def _show_menu(self, hwnd: int) -> None:
+        if self._user32 is None or self._menu is None:
+            return
+        POINT = self._wintypes.POINT
+        pos = POINT()
+        if not self._user32.GetCursorPos(self._ctypes.byref(pos)):
+            return
+        self._user32.SetForegroundWindow(hwnd)
+        self._user32.TrackPopupMenu(
+            self._menu,
+            0x00000000 | 0x00000002,
+            pos.x,
+            pos.y,
+            0,
+            hwnd,
+            None,
+        )
+        self._user32.PostMessageW(hwnd, 0, 0, 0)  # WM_NULL
+
+    def _dispatch_command(self, command_id: int) -> None:
+        if command_id == self._ID_OPEN:
+            self.controller._menu_open(None, None)
+        elif command_id == self._ID_START:
+            self.controller._menu_start(None, None)
+        elif command_id == self._ID_RESTART:
+            self.controller._menu_restart(None, None)
+        elif command_id == self._ID_STOP:
+            self.controller._menu_stop(None, None)
+        elif command_id == self._ID_QUIT:
+            self.controller._menu_quit(None, None)
+
+    def _add_icon(self, hwnd: int) -> None:
+        if self._shell32 is None or self._user32 is None:
+            return
+        ctypes = self._ctypes
+        wintypes = self._wintypes
+
+        class NOTIFYICONDATA(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("hWnd", wintypes.HWND),
+                ("uID", wintypes.UINT),
+                ("uFlags", wintypes.UINT),
+                ("uCallbackMessage", wintypes.UINT),
+                ("hIcon", wintypes.HICON),
+                ("szTip", wintypes.WCHAR * 128),
+                ("dwState", wintypes.DWORD),
+                ("dwStateMask", wintypes.DWORD),
+                ("szInfo", wintypes.WCHAR * 256),
+                ("uTimeoutOrVersion", wintypes.UINT),
+                ("szInfoTitle", wintypes.WCHAR * 64),
+                ("dwInfoFlags", wintypes.DWORD),
+                ("guidItem", ctypes.c_byte * 16),
+                ("hBalloonIcon", wintypes.HICON),
+            ]
+
+        self._NOTIFYICONDATA = NOTIFYICONDATA
+        data = NOTIFYICONDATA()
+        data.cbSize = ctypes.sizeof(NOTIFYICONDATA)
+        data.hWnd = hwnd
+        data.uID = 1
+        data.uFlags = 0x0001 | 0x0002 | 0x0004  # NIF_MESSAGE | NIF_ICON | NIF_TIP
+        data.uCallbackMessage = self._WM_TRAY
+        data.hIcon = self._get_active_icon_handle()
+        tooltip = (self._tooltip or APP_NAME)[:127]
+        data.szTip = tooltip
+        data.dwState = 0
+        data.dwStateMask = 0
+        data.szInfo = ""
+        data.uTimeoutOrVersion = 0
+        data.szInfoTitle = ""
+        data.dwInfoFlags = 0
+        data.guidItem = (ctypes.c_byte * 16)(*([0] * 16))
+        data.hBalloonIcon = 0
+        if not self._shell32.Shell_NotifyIconW(0x00000000, ctypes.byref(data)):
+            error = ctypes.WinError()
+            self.logger.log(f"Tray icon disabled: failed to add icon ({error}).")
+            return
+        data.uTimeoutOrVersion = 4  # NOTIFYICON_VERSION_4
+        self._shell32.Shell_NotifyIconW(0x00000004, ctypes.byref(data))
+
+    def _apply_state_internal(self, hwnd: int) -> None:
+        if self._shell32 is None or self._NOTIFYICONDATA is None:
+            return
+        ctypes = self._ctypes
+        data = self._NOTIFYICONDATA()
+        data.cbSize = ctypes.sizeof(self._NOTIFYICONDATA)
+        data.hWnd = hwnd
+        data.uID = 1
+        data.uFlags = 0x0002 | 0x0004  # NIF_ICON | NIF_TIP
+        data.hIcon = self._get_active_icon_handle()
+        tooltip = (self._tooltip or APP_NAME)[:127]
+        data.szTip = tooltip
+        self._shell32.Shell_NotifyIconW(0x00000001, ctypes.byref(data))
+
+    def _get_active_icon_handle(self) -> int:
+        if self._active and self._hicon_active:
+            return self._hicon_active
+        if self._hicon_idle:
+            return self._hicon_idle
+        return 0
+
+    def _remove_icon(self) -> None:
+        if self._shell32 is None or self._hwnd is None or self._NOTIFYICONDATA is None:
+            return
+        ctypes = self._ctypes
+        data = self._NOTIFYICONDATA()
+        data.cbSize = ctypes.sizeof(self._NOTIFYICONDATA)
+        data.hWnd = self._hwnd
+        data.uID = 1
+        self._shell32.Shell_NotifyIconW(0x00000002, ctypes.byref(data))
 
 class SessionTracker:
     def __init__(
