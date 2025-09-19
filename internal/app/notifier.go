@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode/utf16"
 )
@@ -22,13 +23,11 @@ import (
 type DesktopNotifier struct {
 	logger     *AppLogger
 	powershell string
+	lookupOnce sync.Once
 }
 
 func NewDesktopNotifier(logger *AppLogger) *DesktopNotifier {
-	return &DesktopNotifier{
-		logger:     logger,
-		powershell: findPowerShell(),
-	}
+	return &DesktopNotifier{logger: logger}
 }
 
 // Send dispatches the notification asynchronously so the UI remains responsive.
@@ -49,6 +48,7 @@ func (n *DesktopNotifier) sendInternal(title, message string) {
 }
 
 func (n *DesktopNotifier) sendWindowsToast(title, message string) bool {
+	n.ensurePowerShell()
 	if n.powershell == "" {
 		return false
 	}
@@ -70,6 +70,15 @@ func (n *DesktopNotifier) sendWindowsToast(title, message string) bool {
 		return false
 	}
 	return true
+}
+
+func (n *DesktopNotifier) ensurePowerShell() {
+	if n == nil {
+		return
+	}
+	n.lookupOnce.Do(func() {
+		n.powershell = findPowerShell()
+	})
 }
 
 func buildWindowsToastScript(title, message string) string {
