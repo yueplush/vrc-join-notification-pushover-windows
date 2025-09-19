@@ -1,21 +1,21 @@
+
 # VRChat Join Notification with Pushover
 
-Cross-platform helper that watches VRChat logs and sends desktop and optional Pushover alerts when friends join. Windows now ships as a Go GUI built with Fyne, while Linux installs as a Python app with a Tk GUI.
+Cross-platform helper that watches VRChat logs and sends desktop alerts when friends join. Optional Pushover support lets you receive the same notifications on mobile devices.
 
 ## Features
-- Tracks the newest `output_log_*.txt` / `Player.log` and follows roll-overs automatically.
+- Tracks the newest `output_log_*.txt` / `Player.log` file and follows roll-overs automatically.
 - Emits one world join toast and one per unique player, ignoring the generic "A player joined your instance." message.
 - Debounces duplicates with configurable cooldowns and mirrors behaviour across desktop and push notifications.
-- Linux adds tray support when dependencies exist and can auto-hide on launch; Windows can be run directly or packaged as an `.exe`.
+- The Linux build adds tray support when dependencies exist and can auto-hide on launch; Windows can run directly from Python or be packaged with PyInstaller.
 
 ## Repository layout
 | Path | Description |
 | --- | --- |
-| `main.go` | Windows Go GUI entry point built with Fyne (requires CGO/OpenGL). |
-| `main_fallback.go` | Console-based entry point used when CGO is unavailable (e.g. Windows on ARM). |
 | `src/vrchat-join-notification-with-pushover_linux.py` | Legacy shim that calls the packaged Linux app. |
-| `src/vrchat_join_notification/` | Installable Python package with the Linux GUI and notifier logic. |
-| `go.mod` | Module definition for the Windows build. |
+| `src/vrchat_join_notification/` | Installable Python package with the GUI and notifier logic. |
+| `public/` | Static assets used by the GUI for onboarding tips. |
+| `pyproject.toml` | Python packaging metadata. |
 
 ---
 
@@ -29,98 +29,67 @@ cd vrchat-join-notification-with-pushover
 
 ---
 
-## Windows版のビルド手順 (Go/Fyne GUI)
-1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**:
-   ```powershell
-   go version
-   ```
-2. Install the maintained Fyne tooling used for packaging:
-   ```powershell
-   go install fyne.io/tools/cmd/fyne@latest
-   ```
-   Ensure `%USERPROFILE%\go\bin` is on your `PATH` so the `fyne` command is available.
-3. Restore Go dependencies:
-   ```powershell
-   go mod tidy
-   ```
-4. Build a development binary without a console window:
-   ```powershell
-   go build -ldflags="-H=windowsgui" -o VRChatJoinNotifier.exe .
-   ```
-   > On Windows on ARM (or when CGO is disabled) the build automatically falls back to a console UI and spawns its own console window when launched from Explorer.
-   > Cross-compiling from another platform? Prefix the command with `GOOS=windows GOARCH=amd64`.
-5. Package a distributable `.exe` with the embedded icon:
-   ```powershell
-   fyne package -os windows -icon src/notification.ico -name VRChatJoinNotifier --app-id com.vrchat.joinnotifier -release
-   ```
-   The packaged executable is written to `dist/VRChatJoinNotifier.exe`.
-6. Run `VRChatJoinNotifier.exe`, enter your **Pushover App Token** and **User Key**, and click **Save**.
-   Configuration is stored in `%AppData%\VRChatJoinNotifier\config.json` and the same folder holds `notifier.log`.
-   Saving immediately starts the background log monitor and Pushover notifications.
+## Windows (Python GUI)
+The same Python/Tk application used on Linux is also available on Windows. The steps below cover running it directly and packaging it into a standalone `.exe` with PyInstaller.
 
----
-
-## Windows版 (Pythonベース) の実行と .exe パッケージング
-Linux 版と同じ Python/Tk アプリを Windows でも利用できます。Python のまま実行する方法と、PyInstaller で単体の `.exe` を生成する手順を以下にまとめています。
-
-### 1. 前提条件
-- [Python 3.8+ (64bit)](https://www.python.org/downloads/windows/) をインストールし、セットアップ時に「`Add python.exe to PATH`」を有効化してください。
-- Tkinter は公式インストーラに同梱されています。インストール後、PowerShell でバージョンを確認します。
+### 1. Prerequisites
+- Install [Python 3.8+ (64-bit)](https://www.python.org/downloads/windows/) and enable **Add python.exe to PATH** during setup.
+- Tkinter ships with the official installer. Confirm the installation in PowerShell:
   ```powershell
   py --version
   ```
 
-### 2. 依存関係のインストール
-リポジトリのルートで仮想環境を作成し、Python 版アプリと任意でトレイ機能を入れます。
+### 2. Install dependencies
+Create a virtual environment in the repository root and install the application. Add the tray extra if you need Windows tray support.
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-# 基本機能のみ
+# Base functionality
 python -m pip install .
-# システムトレイ対応が必要なら
+# Enable optional system tray integration
 python -m pip install '.[tray]'
 ```
 
-> PowerShell の実行ポリシーでエラーになる場合は、一時的に `Set-ExecutionPolicy -Scope Process RemoteSigned` を実行してください。
+> If PowerShell blocks script execution, run `Set-ExecutionPolicy -Scope Process RemoteSigned` for the current session.
 
-### 3. Python スクリプトとして起動する
-仮想環境を有効にしたまま、Python 版 GUI を直接起動できます。
+### 3. Run as a Python script
+With the virtual environment active you can launch the GUI directly:
 
 ```powershell
-# Windows でも Linux と同じ GUI が立ち上がります
+# Launches the same interface shipped on Linux
 python -m vrchat_join_notification.app
 ```
 
-> 設定ファイルやログは `%USERPROFILE%\.local\share\vrchat-join-notification-with-pushover` 配下に保存されます。必要に応じてアプリ内の「Install Dir」を Windows の任意のフォルダに変更してください。
+> Configuration files and logs live under `%USERPROFILE%\.local\share\vrchat-join-notification-with-pushover`. Update the **Install Dir** in-app if you want to store assets elsewhere on Windows.
 
-### 4. PyInstaller で `.exe` を作成する
-Python 版をそのまま Windows 用にバンドルしたい場合は [PyInstaller](https://pyinstaller.org/) を利用します。
+### 4. Package with PyInstaller
+Bundle the Python build into a single-file `.exe` when you want to redistribute it.
 
 ```powershell
-# 仮想環境を有効にした状態で実行
+# With the virtual environment still active
 python -m pip install pyinstaller
 pyinstaller ^
   --noconsole ^
   --name VRChatJoinNotifierPy ^
-  --icon src/notification.ico ^
+  --icon src/vrchat_join_notification/notification.ico ^
   --add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification" ^
   src/vrchat_join_notification/app.py
 ```
 
-- ビルドが完了すると `dist/VRChatJoinNotifierPy/VRChatJoinNotifierPy.exe` が生成されます。
-- 生成物は単体で動作しますが、初回起動時に Microsoft Defender SmartScreen による警告が表示される場合があります。その際は **詳細情報** → **実行** を選択してください。
-- `.spec` ファイルを編集してカスタマイズしたい場合は、最初に `pyinstaller --name ... --onefile --icon ... --add-data ... --specpath buildspec` などでテンプレートを出力し、以後は `pyinstaller buildspec/VRChatJoinNotifierPy.spec` を実行します。
+- The build produces `dist/VRChatJoinNotifierPy/VRChatJoinNotifierPy.exe`.
+- The executable runs standalone, but Microsoft Defender SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.
+- If you want to customise the build, generate a template first (`pyinstaller --name ... --onefile --icon ... --add-data ... --specpath buildspec`) and then run `pyinstaller buildspec/VRChatJoinNotifierPy.spec`.
 
-> PyInstaller の `--add-data` は Windows では `;` 区切りを使用します (Linux/macOS では `:`)。
+> PyInstaller uses `;` to separate `--add-data` entries on Windows (Linux/macOS use `:`).
 
-PyInstaller で作成した `.exe` は Linux 版と同等の機能を提供し、同じ設定ファイルを共有します。
+PyInstaller packages provide the same features as the Linux version and share configuration data.
 
 ---
 
 ## Linux quick start (Python package)
-Use the `vrchat-join-notifier` command provided by the installable Python package. The compatibility script simply forwards to it.
+Use the `vrchat-join-notifier` command installed with the Python package. The compatibility script in `src/` simply forwards to it.
 
 ### 1. Prerequisites
 Install Python 3.8+, Tk bindings, `libnotify`, and `procps`.
@@ -187,21 +156,21 @@ Run the command added to your `$PATH`:
 vrchat-join-notifier
 ```
 
-Set the install folder, VRChat log path, and optional Pushover keys in the GUI. **Add to Startup** and **Remove from Startup** manage the autostart entry.
+Configure the install folder, VRChat log path, and optional Pushover keys in the GUI. **Add to Startup** and **Remove from Startup** manage the autostart entry.
 
 ### 4. Start automatically on login (optional)
 The GUI writes `~/.config/autostart/vrchat-join-notifier.desktop`. To manage it manually:
 
 ```bash
 mkdir -p ~/.config/autostart
-cat > ~/.config/autostart/vrchat-join-notifier.desktop <<'EOF'
+cat > ~/.config/autostart/vrchat-join-notifier.desktop <<'AUTOSTART'
 [Desktop Entry]
 Type=Application
 Name=VRChat Join Notification with Pushover
 Comment=Watch VRChat logs and notify when friends join.
 Exec=vrchat-join-notifier
 Terminal=false
-EOF
+AUTOSTART
 ```
 
 Point `Exec` to your virtual environment if needed, then log out and back in to test.
@@ -209,7 +178,7 @@ Point `Exec` to your virtual environment if needed, then log out and back in to 
 ---
 
 # Uninstalling on Linux
-Use the tool you installed with:
+Use the same tool you installed with:
 
 - **pip / pip install --user**
   ```bash
@@ -220,7 +189,7 @@ Use the tool you installed with:
   pipx uninstall vrchat-join-notification-with-pushover
   ```
 
-Delete `~/.local/share/vrchat-join-notification-with-pushover` if you want to remove cached data.
+Delete `~/.local/share/vrchat-join-notification-with-pushover` if you also want to remove cached data.
 
 ---
 
