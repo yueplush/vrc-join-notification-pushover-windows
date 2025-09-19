@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from importlib import resources
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -172,6 +172,26 @@ def _build_windows_toast_script(title: str, message: str) -> str:
         """
     ).strip()
     return script
+
+
+def _prefer_windows_pythonw(executable: str) -> str:
+    if os.name != "nt":
+        return executable
+    candidate = (executable or "").strip()
+    if not candidate:
+        return "pythonw.exe"
+    candidate = _expand_path(candidate)
+    dirname, basename = os.path.split(candidate)
+    lower = basename.lower()
+    if lower.endswith("python.exe") or lower.endswith("python3.exe"):
+        pythonw = os.path.join(dirname, "pythonw.exe")
+        if os.path.exists(pythonw):
+            return pythonw
+    if lower.startswith("python") and not lower.endswith("w.exe"):
+        pythonw = os.path.join(dirname, "pythonw.exe")
+        if os.path.exists(pythonw):
+            return pythonw
+    return candidate
 
 
 @dataclass
@@ -808,6 +828,8 @@ class DesktopNotifier:
         if hasattr(subprocess, "STARTUPINFO"):
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+            if hasattr(startupinfo, "wShowWindow"):
+                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             result = subprocess.run(
@@ -1985,49 +2007,39 @@ class AppController:
         self._update_tray_state()
 
     def add_to_startup(self) -> None:
-        entry_path = self._autostart_entry_path()
         try:
-            command, workdir = self._launcher_command()
-            if not command:
+            args, workdir = self._launcher_command()
+            if not args:
                 raise RuntimeError("Unable to determine launch command.")
-            os.makedirs(os.path.dirname(entry_path), exist_ok=True)
-            lines = [
-                "[Desktop Entry]",
-                "Type=Application",
-                "Version=1.0",
-                f"Name={APP_NAME}",
-                "Comment=Monitor VRChat joins and send notifications.",
-                f"Exec={command}",
-                "Terminal=false",
-                "X-GNOME-Autostart-enabled=true",
-            ]
-            if workdir:
-                lines.append(f"Path={workdir}")
-            with open(entry_path, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines) + "\n")
+            if os.name == "nt":
+                self._add_to_startup_windows(args)
+                entry_description = r"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+            else:
+                entry_description = self._add_to_startup_unix(args, workdir)
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Failed to add to startup:\n{exc}")
             self.logger.log(f"Failed to add startup entry: {exc}")
             self.notifier.send(APP_NAME, f"Failed to add to startup: {exc}")
         else:
             self.status_var.set("Added to startup.")
-            self.logger.log(f"Startup entry created at {entry_path}")
+            self.logger.log(f"Startup entry created at {entry_description}")
             self.notifier.send(APP_NAME, "Added to startup.")
         finally:
             self._update_startup_buttons()
 
     def remove_from_startup(self) -> None:
-        entry_path = self._autostart_entry_path()
         try:
-            if os.path.exists(entry_path):
-                os.remove(entry_path)
+            if os.name == "nt":
+                entry_description = self._remove_from_startup_windows()
+            else:
+                entry_description = self._remove_from_startup_unix()
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Failed to remove from startup:\n{exc}")
             self.logger.log(f"Failed to remove startup entry: {exc}")
             self.notifier.send(APP_NAME, f"Failed to remove from startup: {exc}")
         else:
             self.status_var.set("Removed from startup.")
-            self.logger.log(f"Startup entry removed from {entry_path}")
+            self.logger.log(f"Startup entry removed from {entry_description}")
             self.notifier.send(APP_NAME, "Removed from startup.")
         finally:
             self._update_startup_buttons()
@@ -2172,8 +2184,8 @@ class AppController:
         autostart_dir = _expand_path(os.path.join(config_home, "autostart"))
         return os.path.join(autostart_dir, AUTOSTART_FILE_NAME)
 
-    def _launcher_command(self) -> Tuple[str, Optional[str]]:
-        args: list[str]
+    def _launcher_command(self) -> Tuple[List[str], Optional[str]]:
+        args: List[str]
         workdir: Optional[str]
         if getattr(sys, "frozen", False):
             exe_path = os.path.abspath(sys.executable)
@@ -2181,20 +2193,110 @@ class AppController:
             workdir = os.path.dirname(exe_path)
         else:
             script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
-            python_exe = sys.executable or "python3"
-            if script and script.lower().endswith(('.py', '.pyw')) and os.path.isfile(script):
-                args = [python_exe, script, *sys.argv[1:]]
+            python_exe = sys.executable or ""
+            if os.name == "nt":
+                python_exe = _prefer_windows_pythonw(python_exe)
+            else:
+                python_exe = python_exe or "python3"
+            if script and script.lower().endswith((".py", ".pyw")) and os.path.isfile(script):
+                args = [python_exe or ("pythonw.exe" if os.name == "nt" else "python3"), script, *sys.argv[1:]]
                 workdir = os.path.dirname(script)
             elif script:
                 args = [script, *sys.argv[1:]]
                 workdir = os.path.dirname(script)
             else:
-                args = [python_exe, "-m", "vrchat_join_notification.app", *sys.argv[1:]]
+                launcher = python_exe or ("pythonw.exe" if os.name == "nt" else "python3")
+                args = [launcher, "-m", "vrchat_join_notification.app", *sys.argv[1:]]
                 workdir = None
-        command = " ".join(shlex.quote(arg) for arg in args if arg)
-        return command, workdir
+        args = [arg for arg in args if arg]
+        return args, workdir
+
+    def _format_exec_command(self, args: List[str]) -> str:
+        if os.name == "nt":
+            return subprocess.list2cmdline(args)
+        return " ".join(shlex.quote(arg) for arg in args)
+
+    def _add_to_startup_unix(self, args: List[str], workdir: Optional[str]) -> str:
+        entry_path = self._autostart_entry_path()
+        os.makedirs(os.path.dirname(entry_path), exist_ok=True)
+        command = self._format_exec_command(args)
+        lines = [
+            "[Desktop Entry]",
+            "Type=Application",
+            "Version=1.0",
+            f"Name={APP_NAME}",
+            "Comment=Monitor VRChat joins and send notifications.",
+            f"Exec={command}",
+            "Terminal=false",
+            "X-GNOME-Autostart-enabled=true",
+        ]
+        if workdir:
+            lines.append(f"Path={workdir}")
+        with open(entry_path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        return entry_path
+
+    def _add_to_startup_windows(self, args: List[str]) -> None:
+        command = self._format_exec_command(args)
+        try:
+            import winreg  # type: ignore[import-not-found]
+        except Exception as exc:  # pragma: no cover - defensive
+            raise RuntimeError("winreg module is unavailable") from exc
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+            try:
+                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
+            finally:
+                winreg.CloseKey(key)
+        except OSError as exc:
+            raise RuntimeError(f"Unable to update registry: {exc}")
+
+    def _remove_from_startup_unix(self) -> str:
+        entry_path = self._autostart_entry_path()
+        if os.path.exists(entry_path):
+            os.remove(entry_path)
+        return entry_path
+
+    def _remove_from_startup_windows(self) -> str:
+        try:
+            import winreg  # type: ignore[import-not-found]
+        except Exception as exc:  # pragma: no cover - defensive
+            raise RuntimeError("winreg module is unavailable") from exc
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+        except FileNotFoundError:
+            return r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            try:
+                winreg.DeleteValue(key, APP_NAME)
+            except FileNotFoundError:
+                pass
+        finally:
+            winreg.CloseKey(key)
+        return r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
 
     def _autostart_entry_exists(self) -> bool:
+        if os.name == "nt":
+            try:
+                import winreg  # type: ignore[import-not-found]
+            except Exception:
+                return False
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+            except FileNotFoundError:
+                return False
+            try:
+                value, _ = winreg.QueryValueEx(key, APP_NAME)
+                return bool(value)
+            except FileNotFoundError:
+                return False
+            except OSError:
+                return False
+            finally:
+                winreg.CloseKey(key)
         try:
             return os.path.exists(self._autostart_entry_path())
         except Exception:
