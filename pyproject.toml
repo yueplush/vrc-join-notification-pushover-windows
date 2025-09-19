@@ -20,7 +20,9 @@ classifiers = [
   "Topic :: Games/Entertainment",
   "Topic :: System :: Monitoring",
 ]
-dependencies = []
+dependencies = [
+  "cryptography>=41",
+]
 
 [project.optional-dependencies]
 tray = [
