@@ -29,6 +29,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+try:  # pragma: no cover - optional dependency for encryption
+    from cryptography.fernet import Fernet, InvalidToken
+except Exception:  # pragma: no cover - dependency is expected to be available
+    Fernet = None  # type: ignore[assignment]
+
+    class InvalidToken(Exception):  # type: ignore[no-redef]
+        pass
+
 try:  # pragma: no branch - fallback for frozen builds
     from urllib import parse as _urllib_parse, request as _urllib_request
 except Exception:  # pragma: no cover - stdlib should always be present
@@ -59,6 +67,8 @@ AUTOSTART_FILE_NAME = "vrchat-join-notifier.desktop"
 UNICODE_DASHES = "\u2013\u2014"
 JOIN_SEPARATOR_CHARS = ":|-" + UNICODE_DASHES
 JOIN_SEPARATOR_PATTERN = "[-:|" + UNICODE_DASHES + "]+"
+KEY_FILE_NAME = "config.key"
+SECRET_PREFIX = "enc::"
 
 
 def _expand_path(path: str) -> str:
@@ -149,6 +159,70 @@ def _guess_vrchat_log_dir() -> str:
         if os.path.isdir(path):
             return path
     return _expand_path(candidates[0])
+
+
+def _load_cipher(directory: str, create: bool) -> "Fernet":
+    if Fernet is None:
+        raise RuntimeError("Encryption support is unavailable.")
+    path = os.path.join(directory, KEY_FILE_NAME)
+    if os.path.exists(path):
+        try:
+            with open(path, "rb") as handle:
+                key = handle.read().strip()
+        except Exception as exc:  # pragma: no cover - defensive
+            raise RuntimeError(f"Failed to read encryption key: {exc}") from exc
+        if not key:
+            raise RuntimeError("Encryption key file is empty.")
+        try:
+            return Fernet(key)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise RuntimeError(f"Invalid encryption key: {exc}") from exc
+    if not create:
+        raise RuntimeError("Encryption key is missing.")
+    os.makedirs(directory, exist_ok=True)
+    key = Fernet.generate_key()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(key)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise RuntimeError(f"Failed to write encryption key: {exc}") from exc
+    return Fernet(key)
+
+
+def _encrypt_secret(directory: str, value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    cipher = _load_cipher(directory, create=True)
+    token = cipher.encrypt(value.encode("utf-8"))
+    return SECRET_PREFIX + token.decode("ascii")
+
+
+def _decrypt_secret(directory: str, value: Any) -> Tuple[str, Optional[str]]:
+    raw = ""
+    if isinstance(value, str):
+        raw = value.strip()
+    elif value is None:
+        raw = ""
+    else:
+        raw = str(value).strip()
+    if not raw:
+        return "", None
+    if not raw.startswith(SECRET_PREFIX):
+        return raw, None
+    try:
+        cipher = _load_cipher(directory, create=False)
+    except RuntimeError as exc:
+        return "", str(exc)
+    token = raw[len(SECRET_PREFIX) :].encode("ascii")
+    try:
+        plaintext = cipher.decrypt(token).decode("utf-8")
+    except InvalidToken:
+        return "", "Failed to decrypt Pushover secrets; please re-enter them."
+    except Exception as exc:  # pragma: no cover - defensive
+        return "", f"Failed to decrypt Pushover secrets: {exc}"
+    return plaintext, None
 
 
 def _build_windows_toast_script(title: str, message: str) -> str:
@@ -261,11 +335,28 @@ class AppConfig:
                 load_error = f"Failed to load settings: {exc}"
                 data = {}
 
+        install_dir_value = _expand_path(data.get("InstallDir", install_dir))
+        user_value, user_error = _decrypt_secret(
+            install_dir_value, data.get("PushoverUser", "")
+        )
+        token_value, token_error = _decrypt_secret(
+            install_dir_value, data.get("PushoverToken", "")
+        )
+        secret_errors: List[str] = []
+        for error in (user_error, token_error):
+            if error and error not in secret_errors:
+                secret_errors.append(error)
+        if secret_errors:
+            message = "\n".join(secret_errors)
+            if load_error:
+                load_error = f"{load_error}\n{message}"
+            else:
+                load_error = message
         cfg = cls(
-            install_dir=_expand_path(data.get("InstallDir", install_dir)),
+            install_dir=install_dir_value,
             vrchat_log_dir=_expand_path(data.get("VRChatLogDir", _guess_vrchat_log_dir())),
-            pushover_user=str(data.get("PushoverUser", "")),
-            pushover_token=str(data.get("PushoverToken", "")),
+            pushover_user=user_value,
+            pushover_token=token_value,
         )
         legacy_roots = _legacy_storage_roots()
         if legacy_roots:
@@ -304,9 +395,13 @@ class AppConfig:
             "VRChatLogDir": self.vrchat_log_dir,
         }
         if self.pushover_user:
-            payload["PushoverUser"] = self.pushover_user
+            payload["PushoverUser"] = _encrypt_secret(
+                self.install_dir, self.pushover_user
+            )
         if self.pushover_token:
-            payload["PushoverToken"] = self.pushover_token
+            payload["PushoverToken"] = _encrypt_secret(
+                self.install_dir, self.pushover_token
+            )
         with open(self.config_path(), "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, ensure_ascii=False)
         self._write_pointer()
