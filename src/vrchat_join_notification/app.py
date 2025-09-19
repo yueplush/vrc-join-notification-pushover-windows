@@ -29,11 +29,11 @@ from typing import Any, Dict, Optional, Tuple
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-if importlib.util.find_spec("urllib.parse") and importlib.util.find_spec("urllib.request"):
-    import urllib.parse
-    import urllib.request
-else:  # pragma: no cover - stdlib should always be present
-    urllib = None  # type: ignore
+try:  # pragma: no branch - fallback for frozen builds
+    from urllib import parse as _urllib_parse, request as _urllib_request
+except Exception:  # pragma: no cover - stdlib should always be present
+    _urllib_parse = None  # type: ignore[assignment]
+    _urllib_request = None  # type: ignore[assignment]
 
 _TRAY_SPEC = importlib.util.find_spec("pystray")
 _PIL_SPEC = importlib.util.find_spec("PIL.Image")
@@ -827,12 +827,14 @@ class PushoverClient:
     def send(self, title: str, message: str) -> None:
         token = (self._config.pushover_token or "").strip()
         user = (self._config.pushover_user or "").strip()
-        if not token or not user or urllib is None:
-            if not token or not user:
-                self._logger.log("Pushover not configured; skipping.")
+        if not token or not user:
+            self._logger.log("Pushover not configured; skipping.")
+            return
+        if _urllib_parse is None or _urllib_request is None:
+            self._logger.log("Pushover HTTP client unavailable; skipping.")
             return
         try:
-            data = urllib.parse.urlencode(
+            data = _urllib_parse.urlencode(
                 {
                     "token": token,
                     "user": user,
@@ -841,8 +843,8 @@ class PushoverClient:
                     "priority": "0",
                 }
             ).encode("utf-8")
-            request = urllib.request.Request(PO_URL, data=data)
-            with urllib.request.urlopen(request, timeout=20) as response:
+            request = _urllib_request.Request(PO_URL, data=data)
+            with _urllib_request.urlopen(request, timeout=20) as response:
                 body = response.read()
             try:
                 payload = json.loads(body.decode("utf-8"))
