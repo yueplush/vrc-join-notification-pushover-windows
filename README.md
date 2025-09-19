@@ -58,5 +58,25 @@ Install Python 3.8 or newer from python.org (ensure “Add Python to PATH” is 
 - **Python packages**: `python -m build` produces source and wheel archives in `dist/`.
 - **Windows single-file executable**: run `tools\build-windows-exe.ps1` in PowerShell (PyInstaller must be installed).
 
+### Build the Windows executable from source
+If you prefer a standalone `.exe`, clone the repository on Windows and compile it with PyInstaller:
+
+1. Launch PowerShell in the project root and install the build tools.
+   ```powershell
+   python -m pip install --upgrade pip
+   python -m pip install .[tray] pyinstaller
+   ```
+   The optional `[tray]` extra brings in the system tray dependencies; omit it if you do not need the tray icon.
+2. Execute the bundled build script (or call PyInstaller directly) to produce the executable under `dist/`.
+   ```powershell
+   .\tools\build-windows-exe.ps1
+   # equivalent manual command
+   pyinstaller --noconsole --name VRChatJoinNotificationWithPushover `
+       --icon src/vrchat_join_notification/notification.ico `
+       --add-data src/vrchat_join_notification/notification.ico;vrchat_join_notification `
+       src/vrchat_join_notification/app.py
+   ```
+   After the run completes you will find `VRChatJoinNotificationWithPushover.exe` in `dist/` ready for distribution.
+
 ## Configuration basics
 On first launch the app asks for your VRChat log folder, storage location, and Pushover credentials. Settings live in your user directory (`%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux) together with the app log.
