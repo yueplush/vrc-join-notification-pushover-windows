@@ -47,11 +47,11 @@ cd vrchat-join-notification-with-pushover
    ```powershell
    go build -ldflags="-H=windowsgui" -o VRChatJoinNotifier.exe .
    ```
-   > On Windows on ARM (or when CGO is disabled) the build automatically falls back to a console UI.
+   > On Windows on ARM (or when CGO is disabled) the build automatically falls back to a console UI and spawns its own console window when launched from Explorer.
    > Cross-compiling from another platform? Prefix the command with `GOOS=windows GOARCH=amd64`.
 5. Package a distributable `.exe` with the embedded icon:
    ```powershell
-   fyne package -os windows -icon src/notification.ico -name VRChatJoinNotifier -appID com.vrchat.joinnotifier -release
+   fyne package -os windows -icon src/notification.ico -name VRChatJoinNotifier --app-id com.vrchat.joinnotifier -release
    ```
    The packaged executable is written to `dist/VRChatJoinNotifier.exe`.
 6. Run `VRChatJoinNotifier.exe`, enter your **Pushover App Token** and **User Key**, and click **Save**.
