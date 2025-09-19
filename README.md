@@ -17,7 +17,9 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
    ```bash
    python -m venv .venv
    source .venv/bin/activate        # bash/zsh
-   # fish (Garuda Linux, etc.)
+   ```
+   ```bash
+   # if you use fish (Garuda Linux, etc.)
    source .venv/bin/activate.fish
    ```
    On Windows (PowerShell): `python -m venv .venv; .\.venv\Scripts\Activate.ps1`.
