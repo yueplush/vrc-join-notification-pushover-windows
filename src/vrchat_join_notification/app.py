@@ -832,11 +832,17 @@ class DesktopNotifier:
                 startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
+            creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        except AttributeError:
+            pass
+        try:
             result = subprocess.run(
                 [
                     self._powershell,
                     "-NoProfile",
                     "-NonInteractive",
+                    "-WindowStyle",
+                    "Hidden",
                     "-ExecutionPolicy",
                     "Bypass",
                     "-EncodedCommand",
