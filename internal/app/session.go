@@ -28,8 +28,8 @@ type PlayerEvent struct {
 }
 
 var (
-	zeroWidthPattern      = regexp.MustCompile(`[\u200b-\u200d\ufeff]`)
-	joinSeparatorPattern  = regexp.MustCompile(`^[-:|\u2013\u2014]+$`)
+	zeroWidthPattern      = regexp.MustCompile(`[\x{200b}-\x{200d}\x{feff}]`)
+	joinSeparatorPattern  = regexp.MustCompile(`^[-:|\x{2013}\x{2014}]+$`)
 	displayNamePattern    = regexp.MustCompile(`(?i)displayName\s*[:=]\s*([^,\]\)]+)`)
 	namePattern           = regexp.MustCompile(`(?i)\bname\s*[:=]\s*([^,\]\)]+)`)
 	userIDParenPattern    = regexp.MustCompile(`(?i)\(usr_[^\)\s]+\)`)
