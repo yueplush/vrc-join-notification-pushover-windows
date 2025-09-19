@@ -55,6 +55,11 @@ else:  # pragma: no cover - optional dependency
     ImageDraw = None  # type: ignore
 
 APP_NAME = "VRChat Join Notification with Pushover"
+# Windows toast notifications need a stable AppUserModelID without spaces or unusual
+# characters. Keep this identifier in sync wherever we interface with the Windows
+# shell so that taskbar icons and toast notifications originate from the same logical
+# app.
+APP_USER_MODEL_ID = "VRChatJoinNotificationWithPushover"
 CONFIG_FILE_NAME = "config.json"
 POINTER_FILE_NAME = "config-location.txt"
 APP_LOG_NAME = "notifier.log"
@@ -241,11 +246,26 @@ def _build_windows_toast_script(title: str, message: str) -> str:
         $Toast = [Windows.UI.Notifications.ToastNotification]::new($Template)
         $Toast.Tag = "vrchat-join"
         $Toast.Group = "vrchat-join"
-        $Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({json.dumps(APP_NAME)})
+        $Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({json.dumps(APP_USER_MODEL_ID)})
         $Notifier.Show($Toast)
         """
     ).strip()
     return script
+
+
+def ensure_windows_app_user_model_id() -> None:
+    """Register the application AppUserModelID when running on Windows."""
+
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
+            APP_USER_MODEL_ID
+        )
+    except Exception:
+        pass
 
 
 def _prefer_windows_pythonw(executable: str) -> str:
@@ -2427,6 +2447,7 @@ def _show_single_instance_dialog(message: str) -> None:
 
 
 def main() -> None:
+    ensure_windows_app_user_model_id()
     config, load_error = AppConfig.load()
     logger = AppLogger(config)
     guard = SingleInstanceGuard(APP_NAME, logger)

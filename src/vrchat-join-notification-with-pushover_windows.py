@@ -31,7 +31,7 @@ import tracemalloc
 from pathlib import Path
 from typing import Optional, Type
 
-from vrchat_join_notification.app import main
+from vrchat_join_notification.app import ensure_windows_app_user_model_id, main
 
 
 def _log(message: str) -> None:
@@ -256,14 +256,7 @@ def _apply_windows_taskbar_icon() -> None:
     icon_path = _locate_notification_icon()
     if not icon_path:
         return
-    try:
-        import ctypes
-
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
-            "VRChatJoinNotificationWithPushover"
-        )
-    except Exception:
-        pass
+    ensure_windows_app_user_model_id()
 
     try:
         import tkinter as tk
