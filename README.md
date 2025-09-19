@@ -33,7 +33,7 @@ cd vrchat-join-notification-with-pushover
 The same Python/Tk application used on Linux is also available on Windows. The steps below cover running it directly and packaging it into a standalone `.exe` with PyInstaller.
 
 ### 1. Prerequisites
-- Install [Python 3.8+ (64-bit)](https://www.python.org/downloads/windows/) and enable **Add python.exe to PATH** during setup.
+- Install [Python 3.1.3+ (64-bit)](https://www.python.org/downloads/windows/) and enable **Add python.exe to PATH** during setup.
 - Tkinter ships with the official installer. Confirm the installation in PowerShell:
   ```powershell
   py --version
