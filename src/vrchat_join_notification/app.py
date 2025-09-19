@@ -293,6 +293,165 @@ def ensure_windows_app_user_model_id() -> None:
         pass
 
 
+def _resolve_windows_shortcut_targets() -> Optional[Dict[str, str]]:
+    if os.name != "nt":
+        return None
+    try:
+        if getattr(sys, "frozen", False):
+            target_path = _expand_path(sys.executable)
+            arguments = ""
+            working_dir = _expand_path(os.path.dirname(target_path))
+        else:
+            executable = _prefer_windows_pythonw(sys.executable)
+            target_path = _expand_path(executable)
+            if not os.path.isfile(target_path):
+                return None
+            arguments = "-m vrchat_join_notification.app"
+            module_dir = _expand_path(os.path.dirname(__file__))
+            working_dir = module_dir
+    except Exception:
+        return None
+
+    if not os.path.isfile(target_path):
+        return None
+
+    shortcut_dir = os.path.join(
+        _windows_roaming_appdata(),
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+    )
+    try:
+        os.makedirs(shortcut_dir, exist_ok=True)
+    except Exception:
+        return None
+
+    icon_candidates: List[str] = []
+    module_icon = os.path.join(os.path.dirname(__file__), ICON_FILE_NAME)
+    icon_candidates.append(module_icon)
+    try:
+        with resources.path(__name__, ICON_FILE_NAME) as resource_icon:
+            icon_candidates.append(_expand_path(os.fspath(resource_icon)))
+    except Exception:
+        pass
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        icon_candidates.append(os.path.join(frozen_root, ICON_FILE_NAME))
+        icon_candidates.append(
+            os.path.join(frozen_root, "vrchat_join_notification", ICON_FILE_NAME)
+        )
+    icon_path = ""
+    for candidate in icon_candidates:
+        if candidate and os.path.isfile(candidate):
+            icon_path = _expand_path(candidate)
+            break
+
+    return {
+        "shortcut_path": _expand_path(os.path.join(shortcut_dir, f"{APP_NAME}.lnk")),
+        "target_path": target_path,
+        "arguments": arguments,
+        "working_directory": working_dir,
+        "icon_location": f"{icon_path},0" if icon_path else "",
+    }
+
+
+def ensure_windows_start_menu_shortcut() -> None:
+    """Create a Start Menu shortcut so toast notifications stay associated."""
+
+    if os.name != "nt":
+        return
+    targets = _resolve_windows_shortcut_targets()
+    if not targets:
+        return
+    powershell = shutil_which("powershell") or shutil_which("pwsh")
+    if not powershell:
+        return
+
+    script = textwrap.dedent(
+        f"""
+        $ErrorActionPreference = 'Stop'
+        $shortcutPath = {json.dumps(targets['shortcut_path'])}
+        $targetPath = {json.dumps(targets['target_path'])}
+        $arguments = {json.dumps(targets['arguments'])}
+        $workingDirectory = {json.dumps(targets['working_directory'])}
+        $appId = {json.dumps(APP_USER_MODEL_ID)}
+        $description = {json.dumps(APP_NAME)}
+        $iconLocation = {json.dumps(targets['icon_location'])}
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $needsSave = $true
+        if (Test-Path $shortcutPath) {{
+            if (($shortcut.TargetPath -eq $targetPath) -and ($shortcut.Arguments -eq $arguments) -and ($shortcut.AppUserModelID -eq $appId)) {{
+                $existingIcon = $shortcut.IconLocation
+                if ([string]::IsNullOrWhiteSpace($iconLocation)) {{
+                    if ([string]::IsNullOrWhiteSpace($existingIcon)) {{
+                        $needsSave = $false
+                    }}
+                }} elseif ($existingIcon -eq $iconLocation) {{
+                    $needsSave = $false
+                }}
+            }}
+        }}
+        if ($needsSave) {{
+            $shortcut.TargetPath = $targetPath
+            $shortcut.Arguments = $arguments
+            $shortcut.WorkingDirectory = $workingDirectory
+            $shortcut.Description = $description
+            if ($iconLocation) {{
+                $shortcut.IconLocation = $iconLocation
+            }} else {{
+                $shortcut.IconLocation = ""
+            }}
+            try {{ $shortcut.AppUserModelID = $appId }} catch {{ }}
+            $shortcut.Save()
+        }}
+        """
+    ).strip()
+
+    try:
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    except Exception:
+        return
+
+    startupinfo = None
+    creationflags = 0
+    if hasattr(subprocess, "STARTUPINFO"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        if hasattr(startupinfo, "wShowWindow"):
+            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+    except AttributeError:
+        pass
+    try:
+        subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-EncodedCommand",
+                encoded,
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+        )
+    except Exception:
+        try:
+            sys.stderr.write("[vrchat-notifier] Failed to refresh Start Menu shortcut.\n")
+        except Exception:
+            pass
+
+
 def _prefer_windows_pythonw(executable: str) -> str:
     if os.name != "nt":
         return executable
@@ -2511,6 +2670,7 @@ def _show_single_instance_dialog(message: str) -> None:
 
 def main() -> None:
     ensure_windows_app_user_model_id()
+    ensure_windows_start_menu_shortcut()
     config, load_error = AppConfig.load()
     logger = AppLogger(config)
     guard = SingleInstanceGuard(APP_NAME, logger)
