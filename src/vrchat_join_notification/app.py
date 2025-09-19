@@ -6,9 +6,11 @@ using a Tkinter GUI, libnotify desktop notifications and Pushover pushes.
 from __future__ import annotations
 
 import errno
+import io
 import importlib.util
 import json
 import os
+import pkgutil
 import queue
 import re
 import shlex
@@ -863,26 +865,53 @@ class TrayIconController:
             return None
         if self._base_icon is not None:
             return self._base_icon
-        opener = None
         identifier = ICON_FILE_NAME
+        package = __package__ or __name__
+        if package == "__main__":
+            package = "vrchat_join_notification"
+        icon_bytes: Optional[bytes] = None
         try:
-            icon_resource = resources.files(__package__).joinpath(ICON_FILE_NAME)
-        except AttributeError:  # pragma: no cover - fallback for older Python
-            icon_resource = None
-        if icon_resource is not None:
-            opener = icon_resource.open
-            identifier = str(icon_resource)
-        else:  # pragma: no cover - fallback for Python < 3.9
-            opener = lambda mode="rb": resources.open_binary(__package__, ICON_FILE_NAME)
-        try:
-            with opener("rb") as handle:  # type: ignore[misc]
-                with Image.open(handle) as image_handle:
+            icon_bytes = resources.read_binary(package, ICON_FILE_NAME)
+            identifier = f"{package}:{ICON_FILE_NAME}"
+        except (FileNotFoundError, ModuleNotFoundError, AttributeError, TypeError):
+            try:
+                icon_bytes = pkgutil.get_data(package, ICON_FILE_NAME)
+                if icon_bytes:
+                    identifier = f"{package}:{ICON_FILE_NAME}"
+            except Exception:
+                icon_bytes = None
+        if not icon_bytes:
+            meipass = getattr(sys, "_MEIPASS", None)
+            candidate_paths = []
+            if meipass:
+                candidate_paths.append(os.path.join(meipass, "vrchat_join_notification", ICON_FILE_NAME))
+                candidate_paths.append(os.path.join(meipass, ICON_FILE_NAME))
+            module_dir = os.path.dirname(__file__)
+            candidate_paths.append(os.path.join(module_dir, ICON_FILE_NAME))
+            for candidate in candidate_paths:
+                if not candidate:
+                    continue
+                if os.path.exists(candidate):
+                    try:
+                        with open(candidate, "rb") as handle:
+                            icon_bytes = handle.read()
+                            identifier = candidate
+                    except OSError:
+                        continue
+                    if icon_bytes:
+                        break
+        if icon_bytes:
+            try:
+                with Image.open(io.BytesIO(icon_bytes)) as image_handle:
                     self._base_icon = image_handle.convert("RGBA").resize((64, 64))
-        except FileNotFoundError:
+            except FileNotFoundError:
+                self.logger.log(f"Tray icon resource missing: '{identifier}'")
+                self._base_icon = None
+            except Exception as exc:
+                self.logger.log(f"Failed to load tray icon '{identifier}': {exc}")
+                self._base_icon = None
+        else:
             self.logger.log(f"Tray icon resource missing: '{identifier}'")
-            self._base_icon = None
-        except Exception as exc:
-            self.logger.log(f"Failed to load tray icon '{identifier}': {exc}")
             self._base_icon = None
         return self._base_icon
 
