@@ -32,8 +32,6 @@ cd vrchat-join-notification-with-pushover
 1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**.
 2. Clone the repository and build the executable:
    ```powershell
-   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   cd vrchat-join-notification-with-pushover
    go build -o .\vrchat-join-notification-with-pushover.exe .\cmd\vrchat-join-notification-with-pushover
    ```
    > Building from another platform? Cross-compile with:
