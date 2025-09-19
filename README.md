@@ -1,6 +1,6 @@
 # VRChat Join Notification with Pushover
 
-Resident desktop companion that watches your VRChat logs and pings you on the desktop (and optionally through Pushover) whenever a friend joins your instance. The GUI is built with Tkinter, so everything can be configured in-app.
+Resident desktop companion that watches your VRChat logs and pings you on the desktop (and optionally through Pushover) whenever a friend joins your instance. The original release ships a Python/Tkinter GUI, and the repository now additionally contains a native Go-based tray companion for Windows with a self-contained settings window.
 
 ## Highlights
 - Tracks VRChat sessions safely, suppressing duplicates and ignoring your own joins.
@@ -8,6 +8,34 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
 - Optional system tray with quick start/stop controls when `pystray` and `Pillow` are installed.
 
 ## Quick install from source
+
+### Windows native tray companion (Go)
+
+Prefer a small self-contained `.exe` with a built-in settings UI and task-tray controls? Compile the Go implementation that lives in `cmd/vrchat-notifier`.
+
+**Prerequisites**
+
+- Windows 10/11.
+- [Go 1.21 or newer](https://go.dev/dl/).
+
+**Build & run**
+
+1. **Clone the repository**
+   ```powershell
+   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+   Set-Location vrchat-join-notification-with-pushover
+   ```
+2. **Compile the tray application**
+   ```powershell
+   go build -o bin/vrchat-notifier.exe ./cmd/vrchat-notifier
+   ```
+   The build embeds no external assets – just ensure `notification.ico` sits next to the executable (it is already present in the repository root).
+3. **Launch the watcher**
+   ```powershell
+   .\bin\vrchat-notifier.exe
+   ```
+
+The Go binary stores configuration files in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover`, mirroring the Python application's layout. A system-tray icon exposes quick commands (Open Settings, Start/Stop/Restart Monitoring and Quit) and the window may be re-opened at any time from the tray. Desktop notifications and Pushover integration behave just like the original implementation.
 
 ### Windows (PowerShell)
 
