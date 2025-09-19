@@ -21,6 +21,8 @@ import (
 )
 
 func main() {
+	ensureConsole()
+
 	fmt.Println("VRChat Join Notifier (console mode)")
 
 	cfg, err := config.Load()
