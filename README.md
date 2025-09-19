@@ -26,12 +26,23 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
    python -m pip install --upgrade pip
    python -m pip install .           # add '.[tray]' for the optional tray icon
    ```
+   Planning to bundle a Windows executable? Install PyInstaller alongside the project:
+   ```powershell
+   python -m pip install pyinstaller
+   ```
 4. **Run it**
    ```bash
    vrchat-join-notifier
    # or
    python -m vrchat_join_notification.app
    ```
+
+5. **(Optional) Build a Windows executable**
+   ```powershell
+   .\tools\build-windows-exe.ps1
+   ```
+   The script drops a portable `.exe` in `dist/`. If you need to run PyInstaller yourself in PowerShell, quote the `--add-data`
+   flag so the semicolon separator is preserved: `--add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification"`.
 
 ### Linux prerequisites
 Install Python, Tk, and `libnotify` before running the steps above.
@@ -73,7 +84,7 @@ If you prefer a standalone `.exe`, clone the repository on Windows and compile i
    # equivalent manual command
    pyinstaller --noconsole --name VRChatJoinNotificationWithPushover `
        --icon src/vrchat_join_notification/notification.ico `
-       --add-data src/vrchat_join_notification/notification.ico;vrchat_join_notification `
+       --add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification" `
        src/vrchat_join_notification/app.py
    ```
    After the run completes you will find `VRChatJoinNotificationWithPushover.exe` in `dist/` ready for distribution.
