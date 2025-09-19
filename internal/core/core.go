@@ -26,7 +26,7 @@ var (
 	unicodeDashes       = "\u2013\u2014"
 	joinSeparatorChars  = ":|-" + unicodeDashes
 	joinSeparatorRegexp = regexp.MustCompile("[-:|" + unicodeDashes + "]+")
-	zeroWidthRegexp     = regexp.MustCompile("[\\u200b-\\u200d\\ufeff]")
+	zeroWidthRegexp     = regexp.MustCompile("[\u200B-\u200D\uFEFF]")
 	displayNameRegexp   = regexp.MustCompile(`(?i)displayName\s*[:=]\s*([^,\]\)]+)`)
 	nameRegexp          = regexp.MustCompile(`(?i)\bname\s*[:=]\s*([^,\]\)]+)`)
 	inlineUserIDRegexp  = regexp.MustCompile(`(?i)\(usr_[^\)\s]+\)`)
