@@ -1011,6 +1011,11 @@ class TrayIconController:
         self._thread = None
         self._ready.clear()
 
+    def is_ready(self) -> bool:
+        """Return ``True`` if the tray icon is running and ready for updates."""
+
+        return self.available and self._ready.is_set()
+
     def update_state(self, monitoring: bool, tooltip: str) -> None:
         if not self.available:
             return
@@ -2135,6 +2140,18 @@ class AppController:
         if self._quitting:
             self.root.destroy()
             return
+        tray = getattr(self, "tray", None)
+        if not tray or not tray.available:
+            reason = getattr(tray, "disabled_reason", None)
+            if reason:
+                self.status_var.set(f"Tray icon unavailable: {reason}. The notifier will quit.")
+            self.request_quit()
+            return
+        if not tray.is_ready():
+            self.status_var.set(
+                "Tray icon is still initialising; please wait a moment before hiding the window."
+            )
+            return
         self.hide_window()
         self.status_var.set(
             "Settings window hidden. Use the tray icon to reopen or quit the notifier."
@@ -2188,7 +2205,8 @@ class AppController:
     def _maybe_hide_initially(self) -> None:
         if self.config.first_run or self._load_error:
             return
-        if not getattr(self, "tray", None) or not self.tray.available:
+        tray = getattr(self, "tray", None)
+        if not tray or not tray.available:
             return
         if len(sys.argv) > 1:
             return
@@ -2197,7 +2215,10 @@ class AppController:
                 return
         except Exception:
             pass
-        self.root.after(400, self.hide_window)
+        if tray.is_ready():
+            self.root.after(400, self.hide_window)
+        else:
+            self.root.after(200, self._maybe_hide_initially)
 
     def _autostart_entry_path(self) -> str:
         config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
