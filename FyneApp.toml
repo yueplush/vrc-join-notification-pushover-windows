@@ -1,4 +1,0 @@
-appID = "com.vrchat.joinnotifier"
-name = "VRChat Join Notifier"
-icon = "src/notification.ico"
-version = "1.0.0"
