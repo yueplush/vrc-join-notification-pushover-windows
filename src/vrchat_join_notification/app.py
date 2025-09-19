@@ -966,6 +966,7 @@ class TrayIconController:
         menu = pystray.Menu(
             pystray.MenuItem("Open Settings", self._menu_open, default=True),
             pystray.MenuItem("Start Monitoring", self._menu_start),
+            pystray.MenuItem("Restart Monitoring", self._menu_restart),
             pystray.MenuItem("Stop Monitoring", self._menu_stop),
             pystray.MenuItem("Quit", self._menu_quit),
         )
@@ -1037,6 +1038,9 @@ class TrayIconController:
 
     def _menu_start(self, icon: "pystray.Icon", item: "pystray.MenuItem") -> None:
         self.app.root.after(0, self.app.start_monitoring)
+
+    def _menu_restart(self, icon: "pystray.Icon", item: "pystray.MenuItem") -> None:
+        self.app.root.after(0, self.app.restart_monitoring)
 
     def _menu_stop(self, icon: "pystray.Icon", item: "pystray.MenuItem") -> None:
         self.app.root.after(0, self.app.stop_monitoring)
@@ -1931,6 +1935,11 @@ class AppController:
         if self.config.pushover_user and self.config.pushover_token:
             self.notifier.send(APP_NAME, "Settings saved.")
         self.status_var.set("Settings saved.")
+
+    def restart_monitoring(self) -> None:
+        self.start_monitoring()
+        self.status_var.set("Monitoring restarted.")
+        self.logger.log("Monitoring restarted.")
 
     def _save_config(self) -> None:
         previous_user = self.config.pushover_user
