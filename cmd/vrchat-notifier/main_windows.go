@@ -5,11 +5,15 @@ package main
 import (
 	"errors"
 	"fmt"
+	"runtime"
 
 	"vrchat-join-notification-with-pushover/internal/app"
 )
 
 func main() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	guard, err := app.AcquireSingleInstance("VRChatJoinNotificationWithPushover")
 	if err != nil {
 		if errors.Is(err, app.ErrAlreadyRunning) {
