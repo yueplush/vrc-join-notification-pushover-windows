@@ -123,6 +123,55 @@ def _locate_icon_file() -> Optional[str]:
     return None
 
 
+def _load_icon_bytes() -> Optional[bytes]:
+    """Load the raw ``notification.ico`` bytes from any available source."""
+
+    package = __package__ or "vrchat_join_notification"
+    try:
+        data = resources.read_binary(package, ICON_FILE_NAME)
+    except (FileNotFoundError, ModuleNotFoundError, AttributeError, TypeError):
+        data = None
+    if data:
+        return data
+    try:
+        data = pkgutil.get_data(package, ICON_FILE_NAME)
+    except Exception:
+        data = None
+    if data:
+        return data
+    icon_path = _locate_icon_file()
+    if icon_path:
+        try:
+            with open(icon_path, "rb") as handle:
+                return handle.read()
+        except OSError:
+            return None
+    return None
+
+
+def ensure_tray_icon_file() -> Optional[str]:
+    """Ensure the tray icon exists on disk and return its absolute path."""
+
+    icon_path = _locate_icon_file()
+    if icon_path:
+        return icon_path
+    data = _load_icon_bytes()
+    if not data:
+        return None
+    storage_root = _default_storage_root()
+    try:
+        os.makedirs(storage_root, exist_ok=True)
+    except OSError:
+        return None
+    target_path = os.path.join(storage_root, ICON_FILE_NAME)
+    try:
+        with open(target_path, "wb") as handle:
+            handle.write(data)
+    except OSError:
+        return None
+    return target_path
+
+
 def _default_storage_root() -> str:
     if os.name == "nt":
         root = os.path.join(
@@ -401,7 +450,11 @@ class AppLogger:
 class SingleInstanceGuard:
     def __init__(self, identifier: str, logger: Optional[AppLogger] = None) -> None:
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", identifier).strip("._") or "app"
-        self._path = os.path.join(tempfile.gettempdir(), f"{safe_name}.lock")
+        if os.name == "nt":
+            base_dir = _default_storage_root()
+        else:
+            base_dir = tempfile.gettempdir()
+        self._path = os.path.join(base_dir, f"{safe_name}.lock")
         self._handle: Optional[Any] = None
         self._locked = False
         self._logger = logger
@@ -428,13 +481,18 @@ class SingleInstanceGuard:
                 try:
                     msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
                 except OSError as exc:
+                    existing_pid = self._read_existing_pid(self._handle)
                     self._handle.close()
                     self._handle = None
                     win_code = getattr(exc, "winerror", None)
                     if exc.errno in {errno.EACCES, errno.EDEADLK} or win_code in {32, 33}:
-                        self.error = f"{APP_NAME} is already running."
+                        suffix = f" (PID {existing_pid})" if existing_pid else ""
+                        self.error = f"{APP_NAME} is already running.{suffix}"
                         if self._logger:
-                            self._logger.log("Instance guard blocked duplicate launch.")
+                            detail = f" (pid={existing_pid})" if existing_pid else ""
+                            self._logger.log(
+                                f"Instance guard blocked duplicate launch{detail}."
+                            )
                     else:
                         self.error = f"Failed to acquire instance guard: {exc}"
                         if self._logger:
@@ -446,11 +504,16 @@ class SingleInstanceGuard:
                 try:
                     fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
+                    existing_pid = self._read_existing_pid(self._handle)
                     self._handle.close()
                     self._handle = None
-                    self.error = f"{APP_NAME} is already running."
+                    suffix = f" (PID {existing_pid})" if existing_pid else ""
+                    self.error = f"{APP_NAME} is already running.{suffix}"
                     if self._logger:
-                        self._logger.log("Instance guard blocked duplicate launch.")
+                        detail = f" (pid={existing_pid})" if existing_pid else ""
+                        self._logger.log(
+                            f"Instance guard blocked duplicate launch{detail}."
+                        )
                     return False
                 except OSError as exc:
                     self._handle.close()
@@ -520,6 +583,31 @@ class SingleInstanceGuard:
                 os.unlink(self._path)
             except OSError:
                 pass
+
+    def _read_existing_pid(self, handle: Optional[Any]) -> Optional[int]:
+        if handle is None:
+            return None
+        try:
+            handle.seek(0)
+            contents = handle.read()
+        except Exception:
+            return None
+        if not contents:
+            return None
+        if isinstance(contents, bytes):
+            try:
+                contents = contents.decode("utf-8", "ignore")
+            except Exception:
+                return None
+        for token in str(contents).splitlines():
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                return int(token)
+            except ValueError:
+                continue
+        return None
 
     def _ensure_minimum_size(self) -> None:
         if self._handle is None:
@@ -1273,7 +1361,7 @@ class _WindowsNativeTrayIcon:
         except Exception as exc:  # pragma: no cover - Windows specific import guard
             raise RuntimeError(f"ctypes unavailable: {exc}") from exc
 
-        icon_path = _locate_icon_file()
+        icon_path = ensure_tray_icon_file()
         if not icon_path:
             raise RuntimeError("notification.ico not found for tray icon display.")
 
