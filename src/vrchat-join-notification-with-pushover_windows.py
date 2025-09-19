@@ -31,7 +31,7 @@ import tracemalloc
 from pathlib import Path
 from typing import Optional, Type
 
-from vrchat_join_notification.app import main
+from vrchat_join_notification.app import ensure_tray_icon_file, main
 
 
 def _log(message: str) -> None:
@@ -212,6 +212,10 @@ class AntiCheatGuard(contextlib.AbstractContextManager["AntiCheatGuard"]):
 
 def _locate_notification_icon() -> Optional[str]:
     """Locate ``notification.ico`` on disk for taskbar usage."""
+
+    ensured = ensure_tray_icon_file()
+    if ensured:
+        return ensured
 
     candidate_paths = []
     script_path = Path(__file__).resolve()
