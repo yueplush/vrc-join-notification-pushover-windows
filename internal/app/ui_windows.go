@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,16 +22,19 @@ const (
 	ctrlCurrentLog   uint16 = 2003
 	ctrlSessionLabel uint16 = 2004
 	ctrlLastEvent    uint16 = 2005
+)
 
+const (
 	cmdSaveRestart   uint16 = 3001
 	cmdSaveOnly      uint16 = 3002
-	cmdOpenInstall   uint16 = 3003
 	cmdStart         uint16 = 3004
 	cmdRestart       uint16 = 3005
 	cmdStop          uint16 = 3006
 	cmdQuit          uint16 = 3007
 	cmdBrowseInstall uint16 = 3008
 	cmdBrowseLogs    uint16 = 3009
+	cmdAddStartup    uint16 = 3010
+	cmdRemoveStartup uint16 = 3011
 )
 
 const (
@@ -40,6 +44,9 @@ const (
 	trayCmdStop    uint16 = 4004
 	trayCmdQuit    uint16 = 4005
 )
+
+const startupRegistryPath = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+const startupRegistryDescription = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 
 var (
 	mainClassName    = "VRChatJoinNotifierWindow"
@@ -88,12 +95,14 @@ func NewController(cfg *AppConfig, loadNotice string, logger *AppLogger) (*Contr
 	if err := registerClass(mainClassName, windowProc, controller.icon); err != nil {
 		return nil, fmt.Errorf("register window class: %w", err)
 	}
-	hwnd, err := createWindow(mainClassName, AppName, 820, 520, 0)
+	hwnd, err := createWindow(mainClassName, AppName, 920, 560, 0)
 	if err != nil {
 		return nil, fmt.Errorf("create window: %w", err)
 	}
 	controller.hwnd = hwnd
 	controller.createControls()
+	controller.updateMonitoringButtons()
+	controller.updateStartupButtons()
 	showWindow(controller.hwnd)
 	tray, err := newTrayIcon(controller.hwnd, controller.icon)
 	if err != nil {
@@ -131,89 +140,123 @@ func (c *Controller) cleanup() {
 
 func (c *Controller) createControls() {
 	font := defaultUIFont()
-	xMargin := int32(16)
-	y := int32(18)
-	labelWidth := int32(150)
-	editWidth := int32(420)
-	buttonWidth := int32(140)
+	client := getClientRect(c.hwnd)
+	contentWidth := client.Right - client.Left
+	margin := int32(18)
+	gap := int32(12)
 	rowHeight := int32(24)
-	gap := int32(8)
 
-	createLabel := func(text string, x, y, width int32) {
-		ctrl := createControl("STATIC", text, 0, x, y, width, rowHeight, c.hwnd, 0, 0)
+	createStatic := func(text string, x, y, width int32) syscall.Handle {
+		ctrl := createControl("STATIC", text, 0, x, y, width, rowHeight+4, c.hwnd, 0, 0)
 		sendMessage(ctrl, wmSetFont, uintptr(font), 1)
+		return ctrl
 	}
-	createButton := func(id uint16, text string, x, y int32) {
-		ctrl := createControl("BUTTON", text, bsPushButton|wsTabStop, x, y, buttonWidth, rowHeight+6, c.hwnd, id, 0)
+	createButton := func(id uint16, text string, x, y, width int32) {
+		ctrl := createControl("BUTTON", text, bsPushButton|wsTabStop, x, y, width, rowHeight+10, c.hwnd, id, 0)
 		sendMessage(ctrl, wmSetFont, uintptr(font), 1)
 		c.controls[id] = ctrl
 	}
 
-	createLabel("Install directory", xMargin, y, labelWidth)
-	installEdit := createControl("EDIT", c.cfg.InstallDir, esAutoHScroll|wsTabStop, xMargin+labelWidth, y-2, editWidth, rowHeight+4, c.hwnd, ctrlInstallEdit, wsExClientEdge)
+	labelWidth := int32(220)
+	browseWidth := int32(110)
+	editWidth := contentWidth - (margin*2 + labelWidth + browseWidth + gap)
+	if editWidth < 240 {
+		editWidth = 240
+	}
+	y := margin
+
+	createStatic("Install Folder (logs/cache):", margin, y, labelWidth)
+	installEdit := createControl("EDIT", c.cfg.InstallDir, esAutoHScroll|wsTabStop, margin+labelWidth, y-2, editWidth, rowHeight+6, c.hwnd, ctrlInstallEdit, wsExClientEdge)
 	sendMessage(installEdit, wmSetFont, uintptr(font), 1)
 	c.controls[ctrlInstallEdit] = installEdit
-	createButton(cmdBrowseInstall, "Browse...", xMargin+labelWidth+editWidth+gap, y-4)
+	createButton(cmdBrowseInstall, "Browse...", margin+labelWidth+editWidth+gap, y-4, browseWidth)
 
 	y += rowHeight + 18
 
-	createLabel("VRChat log directory", xMargin, y, labelWidth)
-	logEdit := createControl("EDIT", c.cfg.VRChatLogDir, esAutoHScroll|wsTabStop, xMargin+labelWidth, y-2, editWidth, rowHeight+4, c.hwnd, ctrlLogEdit, wsExClientEdge)
+	createStatic("VRChat Log Folder:", margin, y, labelWidth)
+	logEdit := createControl("EDIT", c.cfg.VRChatLogDir, esAutoHScroll|wsTabStop, margin+labelWidth, y-2, editWidth, rowHeight+6, c.hwnd, ctrlLogEdit, wsExClientEdge)
 	sendMessage(logEdit, wmSetFont, uintptr(font), 1)
 	c.controls[ctrlLogEdit] = logEdit
-	createButton(cmdBrowseLogs, "Browse...", xMargin+labelWidth+editWidth+gap, y-4)
+	createButton(cmdBrowseLogs, "Browse...", margin+labelWidth+editWidth+gap, y-4, browseWidth)
 
-	y += rowHeight + 18
+	y += rowHeight + 20
 
-	createLabel("Pushover user key", xMargin, y, labelWidth)
-	userEdit := createControl("EDIT", c.cfg.PushoverUser, esAutoHScroll|wsTabStop, xMargin+labelWidth, y-2, editWidth, rowHeight+4, c.hwnd, ctrlUserEdit, wsExClientEdge)
+	credentialLabelWidth := int32(160)
+	columnGap := int32(24)
+	credentialFieldWidth := (contentWidth - (margin*2 + credentialLabelWidth*2 + columnGap)) / 2
+	if credentialFieldWidth < 180 {
+		credentialFieldWidth = 180
+	}
+
+	createStatic("Pushover User Key:", margin, y, credentialLabelWidth)
+	userEdit := createControl("EDIT", c.cfg.PushoverUser, esAutoHScroll|wsTabStop, margin+credentialLabelWidth, y-2, credentialFieldWidth, rowHeight+6, c.hwnd, ctrlUserEdit, wsExClientEdge)
 	sendMessage(userEdit, wmSetFont, uintptr(font), 1)
 	c.controls[ctrlUserEdit] = userEdit
 
-	y += rowHeight + 12
-
-	createLabel("Pushover API token", xMargin, y, labelWidth)
-	tokenEdit := createControl("EDIT", c.cfg.PushoverToken, esAutoHScroll|wsTabStop, xMargin+labelWidth, y-2, editWidth, rowHeight+4, c.hwnd, ctrlTokenEdit, wsExClientEdge)
+	tokenX := margin + credentialLabelWidth + credentialFieldWidth + columnGap
+	createStatic("Pushover API Token:", tokenX, y, credentialLabelWidth)
+	tokenEdit := createControl("EDIT", c.cfg.PushoverToken, esAutoHScroll|wsTabStop, tokenX+credentialLabelWidth, y-2, credentialFieldWidth, rowHeight+6, c.hwnd, ctrlTokenEdit, wsExClientEdge)
 	sendMessage(tokenEdit, wmSetFont, uintptr(font), 1)
 	c.controls[ctrlTokenEdit] = tokenEdit
 
-	y += rowHeight + 24
+	y += rowHeight + 28
 
-	createButton(cmdSaveRestart, "Save & Restart", xMargin, y)
-	createButton(cmdSaveOnly, "Save Only", xMargin+buttonWidth+gap, y)
-	createButton(cmdOpenInstall, "Open Install Folder", xMargin+2*(buttonWidth+gap), y)
+	primaryButtonCount := int32(3)
+	primaryAvailable := contentWidth - (margin*2 + gap*(primaryButtonCount-1))
+	primaryWidth := primaryAvailable / primaryButtonCount
+	if primaryWidth < 170 {
+		primaryWidth = 170
+	}
+	buttonY := y
+	x := margin
+	createButton(cmdSaveRestart, "Save and Restart Monitoring", x, buttonY, primaryWidth)
+	x += primaryWidth + gap
+	createButton(cmdStart, "Start Monitoring", x, buttonY, primaryWidth)
+	x += primaryWidth + gap
+	createButton(cmdStop, "Stop Monitoring", x, buttonY, primaryWidth)
 
-	y += rowHeight + 30
+	y += rowHeight + 42
 
-	createButton(cmdStart, "Start Monitoring", xMargin, y)
-	createButton(cmdRestart, "Restart Monitoring", xMargin+buttonWidth+gap, y)
-	createButton(cmdStop, "Stop Monitoring", xMargin+2*(buttonWidth+gap), y)
+	secondaryButtonCount := int32(4)
+	secondaryAvailable := contentWidth - (margin*2 + gap*(secondaryButtonCount-1))
+	secondaryWidth := secondaryAvailable / secondaryButtonCount
+	if secondaryWidth < 170 {
+		secondaryWidth = 170
+	}
+	x = margin
+	createButton(cmdAddStartup, "Add to Startup", x, y, secondaryWidth)
+	x += secondaryWidth + gap
+	createButton(cmdRemoveStartup, "Remove from Startup", x, y, secondaryWidth)
+	x += secondaryWidth + gap
+	createButton(cmdSaveOnly, "Save", x, y, secondaryWidth)
+	x += secondaryWidth + gap
+	createButton(cmdQuit, "Quit", x, y, secondaryWidth)
 
-	y += rowHeight + 30
+	y += rowHeight + 36
 
-	statusLabel := createControl("STATIC", "Idle", 0, xMargin, y, editWidth+labelWidth+buttonWidth, rowHeight+4, c.hwnd, ctrlStatusLabel, 0)
-	sendMessage(statusLabel, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlStatusLabel] = statusLabel
+	infoLabelWidth := int32(110)
+	infoValueWidth := contentWidth - (margin*2 + infoLabelWidth)
+	if infoValueWidth < 260 {
+		infoValueWidth = 260
+	}
+	makeInfoRow := func(caption string, id uint16) {
+		createStatic(caption, margin, y, infoLabelWidth)
+		value := createControl("STATIC", "", 0, margin+infoLabelWidth, y, infoValueWidth, rowHeight+4, c.hwnd, id, 0)
+		sendMessage(value, wmSetFont, uintptr(font), 1)
+		c.controls[id] = value
+		y += rowHeight + 10
+	}
+	makeInfoRow("Monitor:", ctrlMonitorLabel)
+	makeInfoRow("Current log:", ctrlCurrentLog)
+	makeInfoRow("Session:", ctrlSessionLabel)
+	makeInfoRow("Last event:", ctrlLastEvent)
+	makeInfoRow("Status:", ctrlStatusLabel)
 
-	y += rowHeight + 8
-	monitorLabel := createControl("STATIC", "Stopped", 0, xMargin, y, editWidth+labelWidth+buttonWidth, rowHeight+4, c.hwnd, ctrlMonitorLabel, 0)
-	sendMessage(monitorLabel, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlMonitorLabel] = monitorLabel
-
-	y += rowHeight + 8
-	logLabel := createControl("STATIC", "(none)", 0, xMargin, y, editWidth+labelWidth+buttonWidth, rowHeight+4, c.hwnd, ctrlCurrentLog, 0)
-	sendMessage(logLabel, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlCurrentLog] = logLabel
-
-	y += rowHeight + 8
-	sessionLabel := createControl("STATIC", "No active session", 0, xMargin, y, editWidth+labelWidth+buttonWidth, rowHeight+4, c.hwnd, ctrlSessionLabel, 0)
-	sendMessage(sessionLabel, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlSessionLabel] = sessionLabel
-
-	y += rowHeight + 8
-	lastEvent := createControl("STATIC", "", 0, xMargin, y, editWidth+labelWidth+buttonWidth, rowHeight+4, c.hwnd, ctrlLastEvent, 0)
-	sendMessage(lastEvent, wmSetFont, uintptr(font), 1)
-	c.controls[ctrlLastEvent] = lastEvent
+	c.setLabel(ctrlMonitorLabel, "Stopped")
+	c.setLabel(ctrlCurrentLog, "(none)")
+	c.setLabel(ctrlSessionLabel, "No active session")
+	c.setLabel(ctrlLastEvent, "")
+	c.setLabel(ctrlStatusLabel, "Idle")
 }
 
 func (c *Controller) processEvents() {
@@ -239,14 +282,16 @@ func (c *Controller) applyStartupState() {
 		c.setStatus(c.loadNotice)
 	}
 	if c.cfg.FirstRun {
-		c.setStatus("Welcome! Configure folders and optional Pushover keys, then click Save & Restart Monitoring.")
+		c.setStatus("Welcome! Configure folders and optional Pushover keys, then click Save and Restart Monitoring.")
+		c.updateMonitoringButtons()
 		return
 	}
 	if strings.TrimSpace(c.cfg.PushoverUser) != "" && strings.TrimSpace(c.cfg.PushoverToken) != "" {
 		c.startMonitoring()
 	} else {
-		c.setStatus("Optional: add your Pushover keys then click Save & Restart Monitoring when ready.")
+		c.setStatus("Optional: enter your Pushover keys for push notifications, then click Save and Restart Monitoring when ready.")
 	}
+	c.updateStartupButtons()
 }
 
 func (c *Controller) handleEvent(ev MonitorEvent) {
@@ -290,12 +335,12 @@ func (c *Controller) handleCommand(id uint16) {
 		c.saveAndRestart()
 	case cmdSaveOnly:
 		c.saveOnly()
-	case cmdOpenInstall:
-		if c.logger != nil {
-			c.logger.OpenLogDirectory()
-		}
 	case cmdStart:
-		c.startMonitoring()
+		if c.monitor != nil {
+			c.setStatus("Monitoring is already running.")
+		} else {
+			c.startMonitoring()
+		}
 	case cmdRestart:
 		c.restartMonitoring()
 	case cmdStop:
@@ -304,10 +349,18 @@ func (c *Controller) handleCommand(id uint16) {
 		c.requestQuit()
 	case cmdBrowseInstall, cmdBrowseLogs:
 		c.setStatus("Enter the folder path manually in the text box.")
+	case cmdAddStartup:
+		c.addToStartup()
+	case cmdRemoveStartup:
+		c.removeFromStartup()
 	case trayCmdOpen:
 		c.showWindow()
 	case trayCmdStart:
-		c.startMonitoring()
+		if c.monitor != nil {
+			c.setStatus("Monitoring is already running.")
+		} else {
+			c.startMonitoring()
+		}
 	case trayCmdRestart:
 		c.restartMonitoring()
 	case trayCmdStop:
@@ -322,8 +375,20 @@ func (c *Controller) saveAndRestart() {
 		c.setStatus(fmt.Sprintf("Failed to save settings: %v", err))
 		return
 	}
+	wasRunning := c.monitor != nil
+	if wasRunning {
+		c.stopMonitoring()
+	}
 	c.startMonitoring()
-	c.setStatus("Settings saved & monitoring restarted.")
+	switch {
+	case c.monitor != nil && wasRunning:
+		c.setStatus("Settings saved. Monitoring restarted.")
+	case c.monitor != nil:
+		c.setStatus("Settings saved. Monitoring started.")
+	default:
+		c.setStatus("Settings saved.")
+	}
+	c.notifier.Send(AppName, "Settings saved.")
 }
 
 func (c *Controller) saveOnly() {
@@ -332,6 +397,7 @@ func (c *Controller) saveOnly() {
 		return
 	}
 	c.setStatus("Settings saved.")
+	c.notifier.Send(AppName, "Settings saved.")
 }
 
 func (c *Controller) saveConfig() error {
@@ -354,11 +420,13 @@ func (c *Controller) startMonitoring() {
 	}
 	c.monitor = NewLogMonitor(c.cfg, c.logger, c.eventCh)
 	c.monitor.Start()
+	c.session.Reset("Monitoring VRChat logs...")
 	c.setLabel(ctrlMonitorLabel, "Running")
-	c.setStatus("Monitoring started.")
+	c.setStatus("Monitoring VRChat logs...")
 	if c.logger != nil {
 		c.logger.Log("Monitoring started.")
 	}
+	c.updateMonitoringButtons()
 	c.updateTray()
 }
 
@@ -377,15 +445,21 @@ func (c *Controller) stopMonitoring() {
 	if c.logger != nil {
 		c.logger.Log("Monitoring stopped.")
 	}
+	c.updateMonitoringButtons()
 	c.updateTray()
 }
 
 func (c *Controller) restartMonitoring() {
-	c.stopMonitoring()
+	running := c.monitor != nil
+	if running {
+		c.stopMonitoring()
+	}
 	c.startMonitoring()
-	c.setStatus("Monitoring restarted.")
-	if c.logger != nil {
-		c.logger.Log("Monitoring restarted.")
+	if c.monitor != nil {
+		c.setStatus("Monitoring restarted.")
+		if c.logger != nil {
+			c.logger.Log("Monitoring restarted.")
+		}
 	}
 }
 
@@ -440,6 +514,116 @@ func (c *Controller) requestQuit() {
 	c.quitting = true
 	c.stopMonitoring()
 	destroyWindow(c.hwnd)
+}
+
+func (c *Controller) updateMonitoringButtons() {
+	running := c.monitor != nil
+	c.setControlEnabled(cmdStart, !running)
+	c.setControlEnabled(cmdStop, running)
+}
+
+func (c *Controller) updateStartupButtons() {
+	exists, err := startupEntryExists()
+	if err != nil {
+		if c.logger != nil {
+			c.logger.Logf("Failed to query startup entry: %v", err)
+		}
+		c.setStatus(fmt.Sprintf("Failed to query startup entry: %v", err))
+		return
+	}
+	c.setControlEnabled(cmdAddStartup, !exists)
+	c.setControlEnabled(cmdRemoveStartup, exists)
+}
+
+func (c *Controller) setControlEnabled(id uint16, enabled bool) {
+	if hwnd, ok := c.controls[id]; ok {
+		enableWindow(hwnd, enabled)
+	}
+}
+
+func (c *Controller) startupCommand() (string, error) {
+	exe, err := osExecutable()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(exe) == "" {
+		return "", fmt.Errorf("unable to determine executable path")
+	}
+	return strconv.Quote(exe), nil
+}
+
+func (c *Controller) addToStartup() {
+	command, err := c.startupCommand()
+	if err != nil {
+		c.handleStartupError("Failed to determine startup command", err)
+		return
+	}
+	if err := setStartupEntry(command); err != nil {
+		c.handleStartupError("Failed to add to startup", err)
+		return
+	}
+	c.setStatus("Added to startup.")
+	if c.logger != nil {
+		c.logger.Logf("Startup entry created at %s", startupRegistryDescription)
+	}
+	c.notifier.Send(AppName, "Added to startup.")
+	c.updateStartupButtons()
+}
+
+func (c *Controller) removeFromStartup() {
+	if err := removeStartupEntry(); err != nil {
+		c.handleStartupError("Failed to remove from startup", err)
+		return
+	}
+	c.setStatus("Removed from startup.")
+	if c.logger != nil {
+		c.logger.Logf("Startup entry removed from %s", startupRegistryDescription)
+	}
+	c.notifier.Send(AppName, "Removed from startup.")
+	c.updateStartupButtons()
+}
+
+func (c *Controller) handleStartupError(action string, err error) {
+	message := fmt.Sprintf("%s:\n%v", action, err)
+	ShowMessage(message, AppName, MBOK|MBIconError)
+	c.setStatus(fmt.Sprintf("%s: %v", action, err))
+	if c.logger != nil {
+		c.logger.Logf("%s: %v", action, err)
+	}
+	c.notifier.Send(AppName, fmt.Sprintf("%s: %v", action, err))
+}
+
+func startupEntryExists() (bool, error) {
+	key, err := regOpenKey(hkeyCurrentUser, startupRegistryPath, keyQueryValue)
+	if err != nil {
+		if err == errFileNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	defer regCloseKey(key)
+	return regValueExists(key, AppName)
+}
+
+func setStartupEntry(command string) error {
+	key, err := regCreateKey(hkeyCurrentUser, startupRegistryPath, keyRead|keyWrite)
+	if err != nil {
+		return err
+	}
+	defer regCloseKey(key)
+	return regSetStringValue(key, AppName, command)
+}
+
+func removeStartupEntry() error {
+	key, err := regOpenKey(hkeyCurrentUser, startupRegistryPath, keySetValue)
+	if err != nil {
+		if err == errFileNotFound {
+			return nil
+		}
+		return err
+	}
+	defer regCloseKey(key)
+	return regDeleteValue(key, AppName)
 }
 
 func wndProc(hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) uintptr {

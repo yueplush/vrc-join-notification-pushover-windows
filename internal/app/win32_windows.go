@@ -13,6 +13,7 @@ var (
 	modKernel32 = syscall.NewLazyDLL("kernel32.dll")
 	modShell32  = syscall.NewLazyDLL("shell32.dll")
 	modGdi32    = syscall.NewLazyDLL("gdi32.dll")
+	modAdvapi32 = syscall.NewLazyDLL("advapi32.dll")
 )
 
 var (
@@ -49,6 +50,13 @@ var (
 	procCreateMutex        = modKernel32.NewProc("CreateMutexW")
 	procReleaseMutex       = modKernel32.NewProc("ReleaseMutex")
 	procCloseHandle        = modKernel32.NewProc("CloseHandle")
+	procEnableWindow       = modUser32.NewProc("EnableWindow")
+	procRegCreateKeyEx     = modAdvapi32.NewProc("RegCreateKeyExW")
+	procRegOpenKeyEx       = modAdvapi32.NewProc("RegOpenKeyExW")
+	procRegSetValueEx      = modAdvapi32.NewProc("RegSetValueExW")
+	procRegDeleteValue     = modAdvapi32.NewProc("RegDeleteValueW")
+	procRegCloseKey        = modAdvapi32.NewProc("RegCloseKey")
+	procRegQueryValueEx    = modAdvapi32.NewProc("RegQueryValueExW")
 )
 
 const (
@@ -88,6 +96,20 @@ const (
 	mbIconInformation = 0x00000040
 	mbIconWarning     = 0x00000030
 	mbIconError       = 0x00000010
+)
+
+const (
+	regOptionNonVolatile = 0x00000000
+	keyQueryValue        = 0x0001
+	keySetValue          = 0x0002
+	keyRead              = 0x00020019
+	keyWrite             = 0x00020006
+	regSz                = 0x00000001
+)
+
+var (
+	hkeyCurrentUser = syscall.Handle(0x80000001)
+	errFileNotFound = syscall.Errno(2)
 )
 
 type wndClassEx struct {
@@ -350,6 +372,14 @@ func createControl(className, text string, style uint32, x, y, width, height int
 	return syscall.Handle(hwnd)
 }
 
+func enableWindow(hwnd syscall.Handle, enabled bool) {
+	var flag uintptr
+	if enabled {
+		flag = 1
+	}
+	procEnableWindow.Call(uintptr(hwnd), flag)
+}
+
 func postMessage(hwnd syscall.Handle, msg uint32, wparam, lparam uintptr) {
 	procPostMessage.Call(uintptr(hwnd), uintptr(msg), wparam, lparam)
 }
@@ -383,4 +413,129 @@ func closeHandle(handle syscall.Handle) {
 	if handle != 0 {
 		procCloseHandle.Call(uintptr(handle))
 	}
+}
+
+func regCreateKey(root syscall.Handle, path string, access uint32) (syscall.Handle, error) {
+	var handle syscall.Handle
+	var disposition uint32
+	subkey, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	r0, _, e1 := procRegCreateKeyEx.Call(
+		uintptr(root),
+		uintptr(unsafe.Pointer(subkey)),
+		0,
+		0,
+		regOptionNonVolatile,
+		uintptr(access),
+		0,
+		uintptr(unsafe.Pointer(&handle)),
+		uintptr(unsafe.Pointer(&disposition)),
+	)
+	if err := winErrorFromReturn(r0, e1); err != nil {
+		return 0, err
+	}
+	return handle, nil
+}
+
+func regOpenKey(root syscall.Handle, path string, access uint32) (syscall.Handle, error) {
+	var handle syscall.Handle
+	subkey, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	r0, _, e1 := procRegOpenKeyEx.Call(
+		uintptr(root),
+		uintptr(unsafe.Pointer(subkey)),
+		0,
+		uintptr(access),
+		uintptr(unsafe.Pointer(&handle)),
+	)
+	if err := winErrorFromReturn(r0, e1); err != nil {
+		return 0, err
+	}
+	return handle, nil
+}
+
+func regCloseKey(handle syscall.Handle) {
+	if handle != 0 {
+		procRegCloseKey.Call(uintptr(handle))
+	}
+}
+
+func regSetStringValue(key syscall.Handle, name, value string) error {
+	namePtr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return err
+	}
+	data, err := syscall.UTF16FromString(value)
+	if err != nil {
+		return err
+	}
+	size := uint32(len(data) * 2)
+	r0, _, e1 := procRegSetValueEx.Call(
+		uintptr(key),
+		uintptr(unsafe.Pointer(namePtr)),
+		0,
+		regSz,
+		uintptr(unsafe.Pointer(&data[0])),
+		uintptr(size),
+	)
+	return winErrorFromReturn(r0, e1)
+}
+
+func regDeleteValue(key syscall.Handle, name string) error {
+	namePtr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return err
+	}
+	r0, _, e1 := procRegDeleteValue.Call(uintptr(key), uintptr(unsafe.Pointer(namePtr)))
+	if r0 == 0 {
+		return nil
+	}
+	if err := winErrorFromReturn(r0, e1); err != nil {
+		if err == errFileNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func regValueExists(key syscall.Handle, name string) (bool, error) {
+	namePtr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return false, err
+	}
+	var valueType uint32
+	var size uint32
+	r0, _, e1 := procRegQueryValueEx.Call(
+		uintptr(key),
+		uintptr(unsafe.Pointer(namePtr)),
+		0,
+		uintptr(unsafe.Pointer(&valueType)),
+		0,
+		uintptr(unsafe.Pointer(&size)),
+	)
+	if r0 == 0 {
+		return true, nil
+	}
+	if err := winErrorFromReturn(r0, e1); err != nil {
+		if err == errFileNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+func winErrorFromReturn(r uintptr, lastErr error) error {
+	if r == 0 {
+		return nil
+	}
+	if lastErr != nil && lastErr != syscall.Errno(0) {
+		return lastErr
+	}
+	return syscall.Errno(r)
 }
