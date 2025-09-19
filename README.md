@@ -11,7 +11,7 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
 
 ### Windows native tray companion (Go)
 
-Prefer a small self-contained `.exe` with a built-in settings UI that mirrors the desktop companion screenshot above? Compile the Go implementation that lives in `cmd/vrchat-notifier` – it now ships with a Fyne v2 interface tailored for Windows.
+Prefer a small self-contained `.exe` with a built-in settings UI that mirrors the desktop companion screenshot above? Compile the Go implementation that lives in `cmd/VRChatJoinNotificationWithPushover` – it now ships with a Fyne v2 interface tailored for Windows.
 
 **Prerequisites**
 
@@ -34,15 +34,15 @@ Prefer a small self-contained `.exe` with a built-in settings UI that mirrors th
 
 3. **Compile the application**
    ```powershell
-   go build -o bin/vrchat-notifier.exe ./cmd/vrchat-notifier
+   go build -o bin/VRChatJoinNotificationWithPushover.exe ./cmd/VRChatJoinNotificationWithPushover
    ```
    The build embeds no external assets – just ensure `notification.ico` sits next to the executable (it is already present in the repository root).
 4. **Launch the watcher**
    ```powershell
-   .\bin\vrchat-notifier.exe
+   .\bin\VRChatJoinNotificationWithPushover.exe
    ```
 
-The Go binary stores configuration files in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover`, mirroring the Python application's layout. The new Fyne window presents the same controls as the Python companion – path pickers, monitoring buttons, startup management and live status indicators – with button groupings that match the reference screenshot. Desktop notifications and Pushover integration behave just like the original implementation.
+The Go binary stores configuration files in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover`, mirroring the Python application's layout. When minimised the window tucks itself into a Windows system tray icon that exposes "Open Settings", monitoring controls and an "Exit" command. Double-click the tray icon to bring the settings window back. The Fyne window presents the same controls as the Python companion – path pickers, monitoring buttons, startup management and live status indicators – with button groupings that match the reference screenshot. Desktop notifications and Pushover integration behave just like the original implementation.
 
 ### Linux (Bash)
 
