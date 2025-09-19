@@ -645,6 +645,57 @@ def parse_room_transition_line(line: str) -> Optional[Dict[str, str]]:
 
 def is_vrchat_running() -> bool:
     patterns = ["VRChat.exe", "VRChat"]
+    if os.name == "nt":
+        lowered = tuple(pattern.lower() for pattern in patterns)
+        try:
+            import psutil  # type: ignore[import]
+
+            for process in psutil.process_iter(["name", "exe", "cmdline"]):
+                try:
+                    candidates = []
+                    name = process.info.get("name")
+                    if name:
+                        candidates.append(name)
+                    exe = process.info.get("exe")
+                    if exe:
+                        candidates.append(os.path.basename(exe))
+                    cmdline = process.info.get("cmdline") or []
+                    if isinstance(cmdline, (list, tuple)):
+                        candidates.extend(cmdline)
+                    else:
+                        candidates.append(str(cmdline))
+                    for candidate in candidates:
+                        if candidate:
+                            candidate_lower = str(candidate).lower()
+                            if any(pattern in candidate_lower for pattern in lowered):
+                                return True
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        for pattern in patterns:
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"IMAGENAME eq {pattern}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                )
+            except FileNotFoundError:
+                break
+            except Exception:
+                continue
+            output = result.stdout or ""
+            if result.returncode == 0 and pattern.lower() in output.lower():
+                return True
+        return False
+
     for pattern in patterns:
         try:
             result = subprocess.run(
