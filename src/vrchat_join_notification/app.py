@@ -66,6 +66,28 @@ def _expand_path(path: str) -> str:
     return os.path.abspath(expanded)
 
 
+def _windows_hide_window_kwargs() -> Dict[str, Any]:
+    """Return ``subprocess.run`` keyword arguments that suppress console windows."""
+
+    if os.name != "nt":
+        return {}
+
+    kwargs: Dict[str, Any] = {}
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        startupinfo = startupinfo_cls()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        if hasattr(startupinfo, "wShowWindow"):
+            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = startupinfo
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+
+    return kwargs
+
+
 def _default_storage_root() -> str:
     if os.name == "nt":
         root = os.path.join(
@@ -698,6 +720,7 @@ def is_vrchat_running() -> bool:
 
         for pattern in patterns:
             try:
+                hide_window_kwargs = _windows_hide_window_kwargs()
                 result = subprocess.run(
                     ["tasklist", "/FI", f"IMAGENAME eq {pattern}"],
                     stdout=subprocess.PIPE,
@@ -706,6 +729,7 @@ def is_vrchat_running() -> bool:
                     text=True,
                     encoding="utf-8",
                     errors="ignore",
+                    **hide_window_kwargs,
                 )
             except FileNotFoundError:
                 break
