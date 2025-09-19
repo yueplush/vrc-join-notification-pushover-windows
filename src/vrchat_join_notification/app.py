@@ -5,6 +5,7 @@ using a Tkinter GUI, libnotify desktop notifications and Pushover pushes.
 """
 from __future__ import annotations
 
+import base64
 import errno
 import io
 import importlib.util
@@ -17,6 +18,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 from dataclasses import dataclass, field
@@ -65,27 +67,108 @@ def _expand_path(path: str) -> str:
 
 
 def _default_storage_root() -> str:
-    root = os.path.join(
-        os.path.expanduser("~/.local/share"), "vrchat-join-notification-with-pushover"
-    )
+    if os.name == "nt":
+        root = os.path.join(
+            _windows_local_appdata(), "vrchat-join-notification-with-pushover"
+        )
+    else:
+        root = os.path.join(
+            os.path.expanduser("~/.local/share"), "vrchat-join-notification-with-pushover"
+        )
     return _expand_path(root)
 
 
 def _legacy_storage_roots() -> Tuple[str, ...]:
-    legacy_root = os.path.join(os.path.expanduser("~/.local/share"), "VRChatJoinNotifier")
-    return (_expand_path(legacy_root),)
+    candidates: list[str] = []
+    if os.name == "nt":
+        local_appdata = _windows_local_appdata()
+        candidates.append(os.path.join(local_appdata, "VRChatJoinNotifier"))
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            candidates.append(os.path.join(appdata, "VRChatJoinNotifier"))
+        candidates.append(
+            os.path.join(
+                os.path.expanduser("~/.local/share"),
+                "vrchat-join-notification-with-pushover",
+            )
+        )
+    else:
+        candidates.append(
+            os.path.join(os.path.expanduser("~/.local/share"), "VRChatJoinNotifier")
+        )
+    seen: set[str] = set()
+    result: list[str] = []
+    for candidate in candidates:
+        expanded = _expand_path(candidate)
+        if expanded in seen:
+            continue
+        seen.add(expanded)
+        result.append(expanded)
+    return tuple(result)
+
+
+def _windows_local_appdata() -> str:
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        return _expand_path(local_appdata)
+    profile = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    fallback = os.path.join(profile, "AppData", "Local")
+    return _expand_path(fallback)
+
+
+def _windows_locallow_dir() -> str:
+    candidates = []
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        candidates.append(os.path.join(local_appdata, "..", "LocalLow"))
+    profile = os.environ.get("USERPROFILE")
+    if profile:
+        candidates.append(os.path.join(profile, "AppData", "LocalLow"))
+    candidates.append(os.path.join(os.path.expanduser("~"), "AppData", "LocalLow"))
+    for candidate in candidates:
+        expanded = _expand_path(candidate)
+        if os.path.isdir(expanded):
+            return expanded
+    return _expand_path(candidates[0])
 
 
 def _guess_vrchat_log_dir() -> str:
-    candidates = [
-        "~/.steam/steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat",
-        "~/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat",
-    ]
+    if os.name == "nt":
+        base = _windows_locallow_dir()
+        candidates = [os.path.join(base, "VRChat", "VRChat")]
+    else:
+        candidates = [
+            "~/.steam/steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat",
+            "~/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat",
+        ]
     for candidate in candidates:
         path = _expand_path(candidate)
         if os.path.isdir(path):
             return path
     return _expand_path(candidates[0])
+
+
+def _build_windows_toast_script(title: str, message: str) -> str:
+    safe_title = title or APP_NAME
+    safe_message = message or ""
+    script = textwrap.dedent(
+        f"""
+        $Title = {json.dumps(safe_title)}
+        $Message = {json.dumps(safe_message)}
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+        $Template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+        $TextNodes = $Template.GetElementsByTagName("text")
+        if ($TextNodes.Count -gt 0) {{ $TextNodes.Item(0).AppendChild($Template.CreateTextNode($Title)) | Out-Null }}
+        if ($TextNodes.Count -gt 1) {{ $TextNodes.Item(1).AppendChild($Template.CreateTextNode($Message)) | Out-Null }}
+        $Toast = [Windows.UI.Notifications.ToastNotification]::new($Template)
+        $Toast.Tag = "vrchat-join"
+        $Toast.Group = "vrchat-join"
+        $Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({json.dumps(APP_NAME)})
+        $Notifier.Show($Toast)
+        """
+    ).strip()
+    return script
 
 
 @dataclass
@@ -625,34 +708,111 @@ def get_newest_log_path(log_dir: str) -> Optional[str]:
 class DesktopNotifier:
     def __init__(self, logger: AppLogger) -> None:
         self._logger = logger
-        self._notify_send = shutil_which("notify-send")
+        self._notify_send: Optional[str] = None
+        self._powershell: Optional[str] = None
+        if os.name == "nt":
+            self._powershell = shutil_which("powershell") or shutil_which("pwsh")
+        else:
+            self._notify_send = shutil_which("notify-send")
 
     def send(self, title: str, message: str) -> None:
-        if self._notify_send:
-            try:
-                subprocess.run(
-                    [
-                        self._notify_send,
-                        "--app-name",
-                        APP_NAME,
-                        "--icon",
-                        "dialog-information",
-                        title,
-                        message,
-                    ],
-                    check=False,
-                )
+        if os.name == "nt":
+            if self._send_windows_toast(title, message):
                 return
-            except Exception as exc:
-                self._logger.log(f"notify-send failed: {exc}")
+        elif self._send_notify_send(title, message):
+            return
         self._logger.log(f"Notification: {title} - {message}")
+
+    def _send_notify_send(self, title: str, message: str) -> bool:
+        if not self._notify_send:
+            return False
+        try:
+            subprocess.run(
+                [
+                    self._notify_send,
+                    "--app-name",
+                    APP_NAME,
+                    "--icon",
+                    "dialog-information",
+                    title,
+                    message,
+                ],
+                check=False,
+            )
+            return True
+        except Exception as exc:
+            self._logger.log(f"notify-send failed: {exc}")
+        return False
+
+    def _send_windows_toast(self, title: str, message: str) -> bool:
+        if not self._powershell:
+            return False
+        script = _build_windows_toast_script(title, message)
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        startupinfo = None
+        creationflags = 0
+        if hasattr(subprocess, "STARTUPINFO"):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            result = subprocess.run(
+                [
+                    self._powershell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-EncodedCommand",
+                    encoded,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+        except Exception as exc:
+            self._logger.log(f"PowerShell toast error: {exc}")
+            return False
+        if result.returncode == 0:
+            return True
+        self._logger.log(
+            f"PowerShell toast failed with exit code {result.returncode}."
+        )
+        return False
 
 
 def shutil_which(executable: str) -> Optional[str]:
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = os.path.join(directory.strip(), executable)
+    if os.path.dirname(executable):
+        candidate = _expand_path(executable)
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
+        return None
+
+    path_env = os.environ.get("PATH", "")
+    if not path_env:
+        return None
+
+    exts: list[str]
+    if os.name == "nt":
+        pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        pathexts = [ext.strip() for ext in pathext.split(os.pathsep) if ext]
+        if os.path.splitext(executable)[1]:
+            exts = [""]
+        else:
+            exts = [""] + pathexts
+    else:
+        exts = [""]
+
+    for directory in path_env.split(os.pathsep):
+        directory = directory.strip().strip('"')
+        if not directory:
+            continue
+        for ext in exts:
+            candidate = os.path.join(directory, executable + ext)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
     return None
 
 
