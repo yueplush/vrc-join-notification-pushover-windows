@@ -414,18 +414,7 @@ def ensure_windows_start_menu_shortcut() -> None:
     except Exception:
         return
 
-    startupinfo = None
-    creationflags = 0
-    if hasattr(subprocess, "STARTUPINFO"):
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-        if hasattr(startupinfo, "wShowWindow"):
-            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    try:
-        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
-    except AttributeError:
-        pass
+    extra_popen_kwargs = _background_subprocess_kwargs()
     try:
         subprocess.run(
             [
@@ -442,8 +431,7 @@ def ensure_windows_start_menu_shortcut() -> None:
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            startupinfo=startupinfo,
-            creationflags=creationflags,
+            **extra_popen_kwargs,
         )
     except Exception:
         try:
@@ -470,6 +458,29 @@ def _prefer_windows_pythonw(executable: str) -> str:
         if os.path.exists(pythonw):
             return pythonw
     return candidate
+
+
+def _background_subprocess_kwargs() -> Dict[str, Any]:
+    if os.name != "nt":
+        return {}
+
+    kwargs: Dict[str, Any] = {}
+    if hasattr(subprocess, "STARTUPINFO"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        if hasattr(startupinfo, "wShowWindow"):
+            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = startupinfo
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+    except AttributeError:
+        pass
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+
+    return kwargs
 
 
 @dataclass
@@ -1005,6 +1016,7 @@ def is_vrchat_running() -> bool:
                     text=True,
                     encoding="utf-8",
                     errors="ignore",
+                    **_background_subprocess_kwargs(),
                 )
             except FileNotFoundError:
                 break
@@ -1122,18 +1134,7 @@ class DesktopNotifier:
             return False
         script = _build_windows_toast_script(title, message)
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-        startupinfo = None
-        creationflags = 0
-        if hasattr(subprocess, "STARTUPINFO"):
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-            if hasattr(startupinfo, "wShowWindow"):
-                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        try:
-            creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
-        except AttributeError:
-            pass
+        extra_popen_kwargs = _background_subprocess_kwargs()
         try:
             result = subprocess.run(
                 [
@@ -1150,8 +1151,7 @@ class DesktopNotifier:
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                startupinfo=startupinfo,
-                creationflags=creationflags,
+                **extra_popen_kwargs,
             )
         except Exception as exc:
             self._logger.log(f"PowerShell toast error: {exc}")
