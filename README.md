@@ -1,6 +1,6 @@
 # VRChat Join Notification with Pushover
 
-Cross-platform helper that watches VRChat logs and sends desktop and optional Pushover alerts when friends join. Windows ships as a Go CLI that emits Windows toast notifications; Linux installs as a Python app with a Tk GUI.
+Cross-platform helper that watches VRChat logs and sends desktop and optional Pushover alerts when friends join. Windows now ships as a Go GUI built with Fyne, while Linux installs as a Python app with a Tk GUI.
 
 ## Features
 - Tracks the newest `output_log_*.txt` / `Player.log` and follows roll-overs automatically.
@@ -11,7 +11,7 @@ Cross-platform helper that watches VRChat logs and sends desktop and optional Pu
 ## Repository layout
 | Path | Description |
 | --- | --- |
-| `cmd/vrchat-join-notification-with-pushover/` | Windows Go implementation. |
+| `main.go` | Windows Go GUI entry point built with Fyne. |
 | `src/vrchat-join-notification-with-pushover_linux.py` | Legacy shim that calls the packaged Linux app. |
 | `src/vrchat_join_notification/` | Installable Python package with the Linux GUI and notifier logic. |
 | `go.mod` | Module definition for the Windows build. |
@@ -28,40 +28,33 @@ cd vrchat-join-notification-with-pushover
 
 ---
 
-## Windows quick start (Go CLI)
-1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**. The
-   installer adds Go to `PATH`, but you may need to open a new terminal. Verify with:
+## Windows版のビルド手順
+1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**:
    ```powershell
    go version
    ```
-   > If PowerShell reports "`go : The term 'go' is not recognized`", Go is not in your `PATH` yet.
-   > Install it (e.g. `winget install Go.Go`) or reopen PowerShell after installing from the Go
-   > website.
-2. Clone the repository and build the executable:
+2. Install the Fyne CLI used for packaging:
    ```powershell
-   go build -o .\vrchat-join-notification-with-pushover.exe .\cmd\vrchat-join-notification-with-pushover
+   go install fyne.io/fyne/v2/cmd/fyne@latest
    ```
-   > Building from another platform? Cross-compile with:
-   > ```bash
-   > GOOS=windows GOARCH=amd64 go build -o vrchat-join-notification-with-pushover.exe ./cmd/vrchat-join-notification-with-pushover
-   > ```
-   > In **PowerShell**, set the temporary environment variables with:
-   > ```powershell
-   > $env:GOOS = 'windows'
-   > $env:GOARCH = 'amd64'
-   > go build -o vrchat-join-notification-with-pushover.exe ./cmd/vrchat-join-notification-with-pushover
-   > Remove-Item Env:GOOS, Env:GOARCH
-   > ```
-3. Run the interactive configuration once to set the install/cache directory, VRChat log folder, and optional Pushover keys:
+   Ensure `%USERPROFILE%\go\bin` is on your `PATH` so the `fyne` command is available.
+3. Restore Go dependencies:
    ```powershell
-   .\vrchat-join-notification-with-pushover.exe -configure
+   go mod tidy
    ```
-   Settings are stored in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover\config.json`. Logs are written to `notifier.log` in the same folder.
-4. Start monitoring:
+4. Build a development binary without a console window:
    ```powershell
-   .\vrchat-join-notification-with-pushover.exe
+   go build -ldflags="-H=windowsgui" -o VRChatJoinNotifier.exe .
    ```
-   Windows toast notifications mirror the Linux behaviour and an optional Pushover push is sent when both token and user key are configured. Re-run with `-configure` whenever you need to update paths or credentials.
+   > Cross-compiling from another platform? Prefix the command with `GOOS=windows GOARCH=amd64`.
+5. Package a distributable `.exe` with the embedded icon:
+   ```powershell
+   fyne package -os windows -icon src/notification.ico -name VRChatJoinNotifier -release
+   ```
+   The packaged executable is written to `dist/VRChatJoinNotifier.exe`.
+6. Run `VRChatJoinNotifier.exe`, enter your **Pushover App Token** and **User Key**, and click **Save**.
+   Configuration is stored in `%AppData%\VRChatJoinNotifier\config.json` and the same folder holds `notifier.log`.
+   Saving immediately starts the background log monitor and Pushover notifications.
 
 ---
 

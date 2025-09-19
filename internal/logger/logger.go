@@ -14,8 +14,10 @@ import (
 
 // Logger writes timestamped lines to the notifier log.
 type Logger struct {
-	mu   sync.Mutex
-	path string
+	mu         sync.Mutex
+	path       string
+	observerMu sync.RWMutex
+	observer   func(string)
 }
 
 // New creates a logger bound to the configuration install directory.
@@ -37,6 +39,7 @@ func (l *Logger) Log(message string) {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	line := fmt.Sprintf("[%s] %s", timestamp, message)
 	fmt.Println(line)
+	l.notify(line)
 	if l.path == "" {
 		return
 	}
@@ -48,4 +51,23 @@ func (l *Logger) Log(message string) {
 	}
 	defer file.Close()
 	_, _ = file.WriteString(line + "\n")
+}
+
+// SetObserver registers a callback that receives log lines as they are written.
+func (l *Logger) SetObserver(fn func(string)) {
+	if l == nil {
+		return
+	}
+	l.observerMu.Lock()
+	defer l.observerMu.Unlock()
+	l.observer = fn
+}
+
+func (l *Logger) notify(line string) {
+	l.observerMu.RLock()
+	observer := l.observer
+	l.observerMu.RUnlock()
+	if observer != nil {
+		observer(line)
+	}
 }

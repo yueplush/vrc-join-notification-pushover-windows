@@ -151,20 +151,23 @@ func ExpandPath(path string) string {
 
 // DefaultInstallDir returns the platform-specific default configuration root.
 func DefaultInstallDir() string {
-	base := os.Getenv("LOCALAPPDATA")
+	base := os.Getenv("APPDATA")
 	if base == "" {
 		if runtime.GOOS == "windows" {
 			if home := os.Getenv("USERPROFILE"); home != "" {
-				base = filepath.Join(home, "AppData", "Local")
+				base = filepath.Join(home, "AppData", "Roaming")
 			}
 		}
+	}
+	if base == "" {
+		base = os.Getenv("LOCALAPPDATA")
 	}
 	if base == "" {
 		if home, err := os.UserHomeDir(); err == nil {
 			base = filepath.Join(home, ".local", "share")
 		}
 	}
-	return ExpandPath(filepath.Join(base, "VRChatJoinNotificationWithPushover"))
+	return ExpandPath(filepath.Join(base, "VRChatJoinNotifier"))
 }
 
 // GuessVRChatLogDir attempts to locate the VRChat log directory on Windows installations.
