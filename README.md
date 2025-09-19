@@ -44,48 +44,6 @@ Prefer a small self-contained `.exe` with a built-in settings UI that mirrors th
 
 The Go binary stores configuration files in `%LOCALAPPDATA%\VRChatJoinNotificationWithPushover`, mirroring the Python application's layout. The new Fyne window presents the same controls as the Python companion – path pickers, monitoring buttons, startup management and live status indicators – with button groupings that match the reference screenshot. Desktop notifications and Pushover integration behave just like the original implementation.
 
-### Windows (PowerShell)
-
-**Prerequisites**
-
-- Python 3.8 or newer from [python.org](https://www.python.org/downloads/) with “Add Python to PATH” enabled during setup.
-- Git for Windows.
-
-**Install & run**
-
-1. **Grab the code**
-   ```powershell
-   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   Set-Location vrchat-join-notification-with-pushover
-   ```
-2. **Create and activate a virtual environment**
-   ```powershell
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
-3. **Install the project**
-   ```powershell
-   python -m pip install --upgrade pip
-   python -m pip install .            # add '.[tray]' to include the optional system tray extras
-   ```
-4. **Run the desktop companion**
-   ```powershell
-   vrchat-join-notifier
-   # or
-   python -m vrchat_join_notification.app
-   ```
-
-**Compile & bundle (optional)**
-
-Create a portable `.exe` with the bundled PowerShell script (PyInstaller is installed automatically if you used the `[tray]` extra above, otherwise add it first with `python -m pip install pyinstaller`).
-
-```powershell
-python -m pip install pyinstaller     # skip if already installed
-./tools/build-windows-exe.ps1
-```
-
-The script writes `VRChatJoinNotificationWithPushover.exe` to `dist/`. If you prefer to run PyInstaller manually, remember to quote the `--add-data` argument so the semicolon separator survives PowerShell parsing: `--add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification"`.
-
 ### Linux (Bash)
 
 **Prerequisites**
