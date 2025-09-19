@@ -69,7 +69,7 @@ def _expand_path(path: str) -> str:
 def _default_storage_root() -> str:
     if os.name == "nt":
         root = os.path.join(
-            _windows_local_appdata(), "vrchat-join-notification-with-pushover"
+            _windows_local_appdata(), "VRChatJoinNotificationWithPushover"
         )
     else:
         root = os.path.join(
@@ -82,6 +82,9 @@ def _legacy_storage_roots() -> Tuple[str, ...]:
     candidates: list[str] = []
     if os.name == "nt":
         local_appdata = _windows_local_appdata()
+        candidates.append(
+            os.path.join(local_appdata, "vrchat-join-notification-with-pushover")
+        )
         candidates.append(os.path.join(local_appdata, "VRChatJoinNotifier"))
         appdata = os.environ.get("APPDATA")
         if appdata:
