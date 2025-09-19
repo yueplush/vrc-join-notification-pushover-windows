@@ -8,7 +8,6 @@ from __future__ import annotations
 import base64
 import errno
 import io
-import importlib.util
 import json
 import os
 import pkgutil
@@ -35,16 +34,13 @@ except Exception:  # pragma: no cover - stdlib should always be present
     _urllib_parse = None  # type: ignore[assignment]
     _urllib_request = None  # type: ignore[assignment]
 
-_TRAY_SPEC = importlib.util.find_spec("pystray")
-_PIL_SPEC = importlib.util.find_spec("PIL.Image")
-_PIL_DRAW_SPEC = importlib.util.find_spec("PIL.ImageDraw")
-if _TRAY_SPEC and _PIL_SPEC and _PIL_DRAW_SPEC:
-    import pystray
-    from PIL import Image, ImageDraw
-else:  # pragma: no cover - optional dependency
-    pystray = None  # type: ignore
-    Image = None  # type: ignore
-    ImageDraw = None  # type: ignore
+try:  # pragma: no branch - optional dependency may be absent
+    import pystray  # type: ignore[import]
+    from PIL import Image, ImageDraw  # type: ignore[import]
+except ImportError:  # pragma: no cover - optional dependency
+    pystray = None  # type: ignore[assignment]
+    Image = None  # type: ignore[assignment]
+    ImageDraw = None  # type: ignore[assignment]
 
 APP_NAME = "VRChat Join Notification with Pushover"
 CONFIG_FILE_NAME = "config.json"
