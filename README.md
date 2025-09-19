@@ -8,46 +8,55 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
 - Optional system tray with quick start/stop controls when `pystray` and `Pillow` are installed.
 
 ## Quick install from source
+
+### Windows (PowerShell)
+
+**Prerequisites**
+
+- Python 3.8 or newer from [python.org](https://www.python.org/downloads/) with “Add Python to PATH” enabled during setup.
+- Git for Windows.
+
+**Install & run**
+
 1. **Grab the code**
-   ```bash
-   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   cd vrchat-join-notification-with-pushover
-   ```
-2. **Create a virtual environment**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate        # bash/zsh
-   ```
-   ```bash
-   # if you use fish (Garuda Linux, etc.)
-   source .venv/bin/activate.fish
-   ```
-   On Windows (PowerShell): `python -m venv .venv; .\.venv\Scripts\Activate.ps1`.
-3. **Install the package**
-   ```bash
-   python -m pip install --upgrade pip
-   python -m pip install .           # add '.[tray]' for the optional tray icon
-   ```
-   Planning to bundle a Windows executable? Install PyInstaller alongside the project:
    ```powershell
-   python -m pip install pyinstaller
+   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+   Set-Location vrchat-join-notification-with-pushover
    ```
-4. **Run it**
-   ```bash
+2. **Create and activate a virtual environment**
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
+3. **Install the project**
+   ```powershell
+   python -m pip install --upgrade pip
+   python -m pip install .            # add '.[tray]' to include the optional system tray extras
+   ```
+4. **Run the desktop companion**
+   ```powershell
    vrchat-join-notifier
    # or
    python -m vrchat_join_notification.app
    ```
 
-5. **(Optional) Build a Windows executable**
-   ```powershell
-   .\tools\build-windows-exe.ps1
-   ```
-   The script drops a portable `.exe` in `dist/`. If you need to run PyInstaller yourself in PowerShell, quote the `--add-data`
-   flag so the semicolon separator is preserved: `--add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification"`.
+**Compile & bundle (optional)**
 
-### Linux prerequisites
-Install Python, Tk, and `libnotify` before running the steps above.
+Create a portable `.exe` with the bundled PowerShell script (PyInstaller is installed automatically if you used the `[tray]` extra above, otherwise add it first with `python -m pip install pyinstaller`).
+
+```powershell
+python -m pip install pyinstaller     # skip if already installed
+./tools/build-windows-exe.ps1
+```
+
+The script writes `VRChatJoinNotificationWithPushover.exe` to `dist/`. If you prefer to run PyInstaller manually, remember to quote the `--add-data` argument so the semicolon separator survives PowerShell parsing: `--add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification"`.
+
+### Linux (Bash)
+
+**Prerequisites**
+
+Install Python, Tk, and `libnotify` before continuing.
+
 - **Ubuntu / Debian**
   ```bash
   sudo apt update
@@ -58,14 +67,49 @@ Install Python, Tk, and `libnotify` before running the steps above.
   sudo pacman -Syu
   sudo pacman -S python python-pip tk libnotify
   ```
-  Fish users (e.g., Garuda) should activate the venv with `source .venv/bin/activate.fish` as shown above.
+  Fish users (e.g., Garuda) should activate the venv with `source .venv/bin/activate.fish` as shown below.
 - **Fedora**
   ```bash
   sudo dnf install python3 python3-pip python3-virtualenv python3-tkinter libnotify
   ```
 
-### Windows prerequisites
-Install Python 3.8 or newer from python.org (ensure “Add Python to PATH” is enabled). Launch PowerShell and follow the quick-install steps. Toast notifications work out of the box; install tray extras with `python -m pip install "vrchat-join-notification-with-pushover[tray]"`.
+**Install & run**
+
+1. **Grab the code**
+   ```bash
+   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+   cd vrchat-join-notification-with-pushover
+   ```
+2. **Create and activate a virtual environment**
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate          # bash/zsh
+   ```
+   ```bash
+   # for fish shells
+   source .venv/bin/activate.fish
+   ```
+3. **Install the project**
+   ```bash
+   python -m pip install --upgrade pip
+   python -m pip install .             # include '.[tray]' for the optional tray icon support
+   ```
+4. **Run the desktop companion**
+   ```bash
+   vrchat-join-notifier
+   # or
+   python -m vrchat_join_notification.app
+   ```
+
+**Build artifacts (optional)**
+
+Package the project for redistribution with the standard Python build backend:
+
+```bash
+python -m build
+```
+
+Source and wheel archives will appear in `dist/`. If you need a Windows `.exe`, perform the Windows build on a Windows machine as described above.
 
 ## Quick build targets
 - **Python packages**: `python -m build` produces source and wheel archives in `dist/`.
