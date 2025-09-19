@@ -11,7 +11,8 @@ Cross-platform helper that watches VRChat logs and sends desktop and optional Pu
 ## Repository layout
 | Path | Description |
 | --- | --- |
-| `main.go` | Windows Go GUI entry point built with Fyne. |
+| `main.go` | Windows Go GUI entry point built with Fyne (requires CGO/OpenGL). |
+| `main_fallback.go` | Console-based entry point used when CGO is unavailable (e.g. Windows on ARM). |
 | `src/vrchat-join-notification-with-pushover_linux.py` | Legacy shim that calls the packaged Linux app. |
 | `src/vrchat_join_notification/` | Installable Python package with the Linux GUI and notifier logic. |
 | `go.mod` | Module definition for the Windows build. |
@@ -33,9 +34,9 @@ cd vrchat-join-notification-with-pushover
    ```powershell
    go version
    ```
-2. Install the Fyne CLI used for packaging:
+2. Install the maintained Fyne tooling used for packaging:
    ```powershell
-   go install fyne.io/fyne/v2/cmd/fyne@latest
+   go install fyne.io/tools/cmd/fyne@latest
    ```
    Ensure `%USERPROFILE%\go\bin` is on your `PATH` so the `fyne` command is available.
 3. Restore Go dependencies:
@@ -46,10 +47,11 @@ cd vrchat-join-notification-with-pushover
    ```powershell
    go build -ldflags="-H=windowsgui" -o VRChatJoinNotifier.exe .
    ```
+   > On Windows on ARM (or when CGO is disabled) the build automatically falls back to a console UI.
    > Cross-compiling from another platform? Prefix the command with `GOOS=windows GOARCH=amd64`.
 5. Package a distributable `.exe` with the embedded icon:
    ```powershell
-   fyne package -os windows -icon src/notification.ico -name VRChatJoinNotifier -release
+   fyne package -os windows -icon src/notification.ico -name VRChatJoinNotifier -appID com.vrchat.joinnotifier -release
    ```
    The packaged executable is written to `dist/VRChatJoinNotifier.exe`.
 6. Run `VRChatJoinNotifier.exe`, enter your **Pushover App Token** and **User Key**, and click **Save**.
