@@ -13,6 +13,7 @@ Cross-platform helper that watches VRChat logs and sends desktop alerts when fri
 | Path | Description |
 | --- | --- |
 | `src/vrchat-join-notification-with-pushover_linux.py` | Legacy shim that calls the packaged Linux app. |
+| `src/vrchat-join-notification-with-pushover_windows.py` | Compatibility shim that launches the packaged Windows app. |
 | `src/vrchat_join_notification/` | Installable Python package with the GUI and notifier logic. |
 | `public/` | Static assets used by the GUI for onboarding tips. |
 | `pyproject.toml` | Python packaging metadata. |
