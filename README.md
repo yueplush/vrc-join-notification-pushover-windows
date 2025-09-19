@@ -63,7 +63,7 @@ With the virtual environment active you can launch the GUI directly:
 python -m vrchat_join_notification.app
 ```
 
-> Configuration files and logs live under `%USERPROFILE%\.local\share\vrchat-join-notification-with-pushover`. Update the **Install Dir** in-app if you want to store assets elsewhere on Windows.
+> Configuration files and logs now default to `%LOCALAPPDATA%\vrchat-join-notification-with-pushover`. Update the **Install Dir** in-app if you prefer to store assets elsewhere on Windows.
 
 ### 4. Package with PyInstaller
 Bundle the Python build into a single-file `.exe` when you want to redistribute it.
