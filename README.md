@@ -29,7 +29,7 @@ cd vrchat-join-notification-with-pushover
 
 ---
 
-## Windows版のビルド手順
+## Windows版のビルド手順 (Go/Fyne GUI)
 1. Install [Go 1.21+](https://go.dev/dl/) and ensure `go` is available in **PowerShell**:
    ```powershell
    go version
@@ -57,6 +57,65 @@ cd vrchat-join-notification-with-pushover
 6. Run `VRChatJoinNotifier.exe`, enter your **Pushover App Token** and **User Key**, and click **Save**.
    Configuration is stored in `%AppData%\VRChatJoinNotifier\config.json` and the same folder holds `notifier.log`.
    Saving immediately starts the background log monitor and Pushover notifications.
+
+---
+
+## Windows版 (Pythonベース) の実行と .exe パッケージング
+Linux 版と同じ Python/Tk アプリを Windows でも利用できます。Python のまま実行する方法と、PyInstaller で単体の `.exe` を生成する手順を以下にまとめています。
+
+### 1. 前提条件
+- [Python 3.8+ (64bit)](https://www.python.org/downloads/windows/) をインストールし、セットアップ時に「`Add python.exe to PATH`」を有効化してください。
+- Tkinter は公式インストーラに同梱されています。インストール後、PowerShell でバージョンを確認します。
+  ```powershell
+  py --version
+  ```
+
+### 2. 依存関係のインストール
+リポジトリのルートで仮想環境を作成し、Python 版アプリと任意でトレイ機能を入れます。
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+# 基本機能のみ
+python -m pip install .
+# システムトレイ対応が必要なら
+python -m pip install '.[tray]'
+```
+
+> PowerShell の実行ポリシーでエラーになる場合は、一時的に `Set-ExecutionPolicy -Scope Process RemoteSigned` を実行してください。
+
+### 3. Python スクリプトとして起動する
+仮想環境を有効にしたまま、Python 版 GUI を直接起動できます。
+
+```powershell
+# Windows でも Linux と同じ GUI が立ち上がります
+python -m vrchat_join_notification.app
+```
+
+> 設定ファイルやログは `%USERPROFILE%\.local\share\vrchat-join-notification-with-pushover` 配下に保存されます。必要に応じてアプリ内の「Install Dir」を Windows の任意のフォルダに変更してください。
+
+### 4. PyInstaller で `.exe` を作成する
+Python 版をそのまま Windows 用にバンドルしたい場合は [PyInstaller](https://pyinstaller.org/) を利用します。
+
+```powershell
+# 仮想環境を有効にした状態で実行
+python -m pip install pyinstaller
+pyinstaller ^
+  --noconsole ^
+  --name VRChatJoinNotifierPy ^
+  --icon src/notification.ico ^
+  --add-data "src/vrchat_join_notification/notification.ico;vrchat_join_notification" ^
+  src/vrchat_join_notification/app.py
+```
+
+- ビルドが完了すると `dist/VRChatJoinNotifierPy/VRChatJoinNotifierPy.exe` が生成されます。
+- 生成物は単体で動作しますが、初回起動時に Microsoft Defender SmartScreen による警告が表示される場合があります。その際は **詳細情報** → **実行** を選択してください。
+- `.spec` ファイルを編集してカスタマイズしたい場合は、最初に `pyinstaller --name ... --onefile --icon ... --add-data ... --specpath buildspec` などでテンプレートを出力し、以後は `pyinstaller buildspec/VRChatJoinNotifierPy.spec` を実行します。
+
+> PyInstaller の `--add-data` は Windows では `;` 区切りを使用します (Linux/macOS では `:`)。
+
+PyInstaller で作成した `.exe` は Linux 版と同等の機能を提供し、同じ設定ファイルを共有します。
 
 ---
 
