@@ -634,9 +634,18 @@ func startupShortcutPath() (string, error) {
 }
 
 func startupDirectory() (string, error) {
-	base := strings.TrimSpace(os.Getenv("ProgramData"))
+	base := strings.TrimSpace(os.Getenv("APPDATA"))
 	if base == "" {
-		base = `C:\\ProgramData`
+		if dir, err := os.UserConfigDir(); err == nil {
+			base = strings.TrimSpace(dir)
+		}
+	}
+	if base == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			base = filepath.Join(home, "AppData", "Roaming")
+		} else {
+			return "", fmt.Errorf("unable to determine user application data directory: %w", err)
+		}
 	}
 	dir := filepath.Join(base, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 	return dir, nil
