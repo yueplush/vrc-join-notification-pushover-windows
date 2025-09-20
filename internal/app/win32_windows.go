@@ -4,6 +4,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
@@ -15,7 +16,7 @@ var (
 	modKernel32 = syscall.NewLazyDLL("kernel32.dll")
 	modShell32  = syscall.NewLazyDLL("shell32.dll")
 	modGdi32    = syscall.NewLazyDLL("gdi32.dll")
-	modAdvapi32 = syscall.NewLazyDLL("advapi32.dll")
+	modOle32    = syscall.NewLazyDLL("ole32.dll")
 )
 
 var (
@@ -58,12 +59,9 @@ var (
 	procCloseHandle        = modKernel32.NewProc("CloseHandle")
 	procGetConsoleWindow   = modKernel32.NewProc("GetConsoleWindow")
 	procEnableWindow       = modUser32.NewProc("EnableWindow")
-	procRegCreateKeyEx     = modAdvapi32.NewProc("RegCreateKeyExW")
-	procRegOpenKeyEx       = modAdvapi32.NewProc("RegOpenKeyExW")
-	procRegSetValueEx      = modAdvapi32.NewProc("RegSetValueExW")
-	procRegDeleteValue     = modAdvapi32.NewProc("RegDeleteValueW")
-	procRegCloseKey        = modAdvapi32.NewProc("RegCloseKey")
-	procRegQueryValueEx    = modAdvapi32.NewProc("RegQueryValueExW")
+	procCoInitializeEx     = modOle32.NewProc("CoInitializeEx")
+	procCoUninitialize     = modOle32.NewProc("CoUninitialize")
+	procCoCreateInstance   = modOle32.NewProc("CoCreateInstance")
 )
 
 const (
@@ -116,17 +114,17 @@ const (
 )
 
 const (
-	regOptionNonVolatile = 0x00000000
-	keyQueryValue        = 0x0001
-	keySetValue          = 0x0002
-	keyRead              = 0x00020019
-	keyWrite             = 0x00020006
-	regSz                = 0x00000001
+	clsctxInprocServer      = 0x00000001
+	coinitApartmentThreaded = 0x00000002
+	swShowNormal            = 1
+	sFalse                  = 0x00000001
+	rpcEChangedMode         = 0x80010106
 )
 
 var (
-	hkeyCurrentUser = syscall.Handle(0x80000001)
-	errFileNotFound = syscall.Errno(2)
+	clsidShellLink  = syscall.GUID{Data1: 0x00021401, Data2: 0, Data3: 0, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+	iidIShellLinkW  = syscall.GUID{Data1: 0x000214F9, Data2: 0, Data3: 0, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+	iidIPersistFile = syscall.GUID{Data1: 0x0000010b, Data2: 0, Data3: 0, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
 )
 
 type wndClassEx struct {
@@ -522,127 +520,243 @@ func closeHandle(handle syscall.Handle) {
 	}
 }
 
-func regCreateKey(root syscall.Handle, path string, access uint32) (syscall.Handle, error) {
-	var handle syscall.Handle
-	var disposition uint32
-	subkey, err := syscall.UTF16PtrFromString(path)
-	if err != nil {
-		return 0, err
-	}
-	r0, _, e1 := procRegCreateKeyEx.Call(
-		uintptr(root),
-		uintptr(unsafe.Pointer(subkey)),
-		0,
-		0,
-		regOptionNonVolatile,
-		uintptr(access),
-		0,
-		uintptr(unsafe.Pointer(&handle)),
-		uintptr(unsafe.Pointer(&disposition)),
-	)
-	if err := winErrorFromReturn(r0, e1); err != nil {
-		return 0, err
-	}
-	return handle, nil
+type iShellLinkW struct {
+	lpVtbl *iShellLinkWVtbl
 }
 
-func regOpenKey(root syscall.Handle, path string, access uint32) (syscall.Handle, error) {
-	var handle syscall.Handle
-	subkey, err := syscall.UTF16PtrFromString(path)
-	if err != nil {
-		return 0, err
-	}
-	r0, _, e1 := procRegOpenKeyEx.Call(
-		uintptr(root),
-		uintptr(unsafe.Pointer(subkey)),
-		0,
-		uintptr(access),
-		uintptr(unsafe.Pointer(&handle)),
-	)
-	if err := winErrorFromReturn(r0, e1); err != nil {
-		return 0, err
-	}
-	return handle, nil
+type iShellLinkWVtbl struct {
+	QueryInterface      uintptr
+	AddRef              uintptr
+	Release             uintptr
+	GetPath             uintptr
+	GetIDList           uintptr
+	SetIDList           uintptr
+	GetDescription      uintptr
+	SetDescription      uintptr
+	GetWorkingDirectory uintptr
+	SetWorkingDirectory uintptr
+	GetArguments        uintptr
+	SetArguments        uintptr
+	GetHotkey           uintptr
+	SetHotkey           uintptr
+	GetShowCmd          uintptr
+	SetShowCmd          uintptr
+	GetIconLocation     uintptr
+	SetIconLocation     uintptr
+	SetRelativePath     uintptr
+	Resolve             uintptr
+	SetPath             uintptr
 }
 
-func regCloseKey(handle syscall.Handle) {
-	if handle != 0 {
-		procRegCloseKey.Call(uintptr(handle))
-	}
+type iPersistFile struct {
+	lpVtbl *iPersistFileVtbl
 }
 
-func regSetStringValue(key syscall.Handle, name, value string) error {
-	namePtr, err := syscall.UTF16PtrFromString(name)
+type iPersistFileVtbl struct {
+	QueryInterface uintptr
+	AddRef         uintptr
+	Release        uintptr
+	GetClassID     uintptr
+	IsDirty        uintptr
+	Load           uintptr
+	Save           uintptr
+	SaveCompleted  uintptr
+	GetCurFile     uintptr
+}
+
+func (sl *iShellLinkW) Release() {
+	if sl == nil || sl.lpVtbl == nil {
+		return
+	}
+	syscall.SyscallN(sl.lpVtbl.Release, uintptr(unsafe.Pointer(sl)))
+}
+
+func (sl *iShellLinkW) QueryInterface(riid *syscall.GUID, obj unsafe.Pointer) error {
+	if sl == nil || sl.lpVtbl == nil {
+		return fmt.Errorf("shell link interface not initialised")
+	}
+	hr, _, _ := syscall.SyscallN(sl.lpVtbl.QueryInterface, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(riid)), uintptr(obj))
+	return hresultToError("QueryInterface", hr)
+}
+
+func (sl *iShellLinkW) SetPath(path string) error {
+	if sl == nil || sl.lpVtbl == nil {
+		return fmt.Errorf("shell link interface not initialised")
+	}
+	ptr, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return err
 	}
-	data, err := syscall.UTF16FromString(value)
-	if err != nil {
-		return err
-	}
-	size := uint32(len(data) * 2)
-	r0, _, e1 := procRegSetValueEx.Call(
-		uintptr(key),
-		uintptr(unsafe.Pointer(namePtr)),
-		0,
-		regSz,
-		uintptr(unsafe.Pointer(&data[0])),
-		uintptr(size),
-	)
-	return winErrorFromReturn(r0, e1)
+	hr, _, _ := syscall.SyscallN(sl.lpVtbl.SetPath, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(ptr)))
+	return hresultToError("SetPath", hr)
 }
 
-func regDeleteValue(key syscall.Handle, name string) error {
-	namePtr, err := syscall.UTF16PtrFromString(name)
+func (sl *iShellLinkW) SetWorkingDirectory(dir string) error {
+	if sl == nil || sl.lpVtbl == nil {
+		return fmt.Errorf("shell link interface not initialised")
+	}
+	ptr, err := syscall.UTF16PtrFromString(dir)
 	if err != nil {
 		return err
 	}
-	r0, _, e1 := procRegDeleteValue.Call(uintptr(key), uintptr(unsafe.Pointer(namePtr)))
-	if r0 == 0 {
+	hr, _, _ := syscall.SyscallN(sl.lpVtbl.SetWorkingDirectory, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(ptr)))
+	return hresultToError("SetWorkingDirectory", hr)
+}
+
+func (sl *iShellLinkW) SetArguments(args string) error {
+	if sl == nil || sl.lpVtbl == nil {
+		return fmt.Errorf("shell link interface not initialised")
+	}
+	ptr, err := syscall.UTF16PtrFromString(args)
+	if err != nil {
+		return err
+	}
+	hr, _, _ := syscall.SyscallN(sl.lpVtbl.SetArguments, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(ptr)))
+	return hresultToError("SetArguments", hr)
+}
+
+func (sl *iShellLinkW) SetDescription(desc string) error {
+	if sl == nil || sl.lpVtbl == nil {
+		return fmt.Errorf("shell link interface not initialised")
+	}
+	ptr, err := syscall.UTF16PtrFromString(desc)
+	if err != nil {
+		return err
+	}
+	hr, _, _ := syscall.SyscallN(sl.lpVtbl.SetDescription, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(ptr)))
+	return hresultToError("SetDescription", hr)
+}
+
+func (sl *iShellLinkW) SetShowCmd(cmd int32) error {
+	if sl == nil || sl.lpVtbl == nil {
+		return fmt.Errorf("shell link interface not initialised")
+	}
+	hr, _, _ := syscall.SyscallN(sl.lpVtbl.SetShowCmd, uintptr(unsafe.Pointer(sl)), uintptr(cmd))
+	return hresultToError("SetShowCmd", hr)
+}
+
+func (pf *iPersistFile) Release() {
+	if pf == nil || pf.lpVtbl == nil {
+		return
+	}
+	syscall.SyscallN(pf.lpVtbl.Release, uintptr(unsafe.Pointer(pf)))
+}
+
+func (pf *iPersistFile) Save(path string, remember bool) error {
+	if pf == nil || pf.lpVtbl == nil {
+		return fmt.Errorf("persist file interface not initialised")
+	}
+	ptr, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	var keep uintptr
+	if remember {
+		keep = 1
+	}
+	hr, _, _ := syscall.SyscallN(pf.lpVtbl.Save, uintptr(unsafe.Pointer(pf)), uintptr(unsafe.Pointer(ptr)), keep)
+	return hresultToError("IPersistFile::Save", hr)
+}
+
+func (pf *iPersistFile) SaveCompleted() error {
+	if pf == nil || pf.lpVtbl == nil {
+		return fmt.Errorf("persist file interface not initialised")
+	}
+	hr, _, _ := syscall.SyscallN(pf.lpVtbl.SaveCompleted, uintptr(unsafe.Pointer(pf)), 0)
+	return hresultToError("IPersistFile::SaveCompleted", hr)
+}
+
+func initializeCOM() (bool, error) {
+	hr, _, err := procCoInitializeEx.Call(0, uintptr(coinitApartmentThreaded))
+	switch hr {
+	case 0:
+		return true, nil
+	case sFalse:
+		return true, nil
+	case rpcEChangedMode:
+		return false, nil
+	default:
+		if int32(hr) >= 0 {
+			return false, nil
+		}
+		if err != nil && err != syscall.Errno(0) {
+			return false, err
+		}
+		return false, fmt.Errorf("CoInitializeEx failed with HRESULT 0x%08X", uint32(hr))
+	}
+}
+
+func hresultToError(action string, hr uintptr) error {
+	if int32(hr) >= 0 {
 		return nil
 	}
-	if err := winErrorFromReturn(r0, e1); err != nil {
-		if err == errFileNotFound {
-			return nil
+	return fmt.Errorf("%s failed with HRESULT 0x%08X", action, uint32(hr))
+}
+
+func createShortcut(shortcutPath, targetPath, arguments, workingDir, description string) error {
+	initialized, err := initializeCOM()
+	if err != nil {
+		return err
+	}
+	if initialized {
+		defer procCoUninitialize.Call()
+	}
+
+	var link *iShellLinkW
+	hr, _, callErr := procCoCreateInstance.Call(
+		uintptr(unsafe.Pointer(&clsidShellLink)),
+		0,
+		uintptr(clsctxInprocServer),
+		uintptr(unsafe.Pointer(&iidIShellLinkW)),
+		uintptr(unsafe.Pointer(&link)),
+	)
+	if int32(hr) < 0 {
+		if callErr != nil && callErr != syscall.Errno(0) {
+			return callErr
 		}
+		return fmt.Errorf("CoCreateInstance failed with HRESULT 0x%08X", uint32(hr))
+	}
+	if link == nil {
+		return fmt.Errorf("CoCreateInstance returned nil shell link")
+	}
+	defer link.Release()
+
+	if err := link.SetPath(targetPath); err != nil {
+		return err
+	}
+	if strings.TrimSpace(arguments) != "" {
+		if err := link.SetArguments(arguments); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(workingDir) != "" {
+		if err := link.SetWorkingDirectory(workingDir); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(description) != "" {
+		if err := link.SetDescription(description); err != nil {
+			return err
+		}
+	}
+	if err := link.SetShowCmd(swShowNormal); err != nil {
+		return err
+	}
+
+	var persist *iPersistFile
+	if err := link.QueryInterface(&iidIPersistFile, unsafe.Pointer(&persist)); err != nil {
+		return err
+	}
+	if persist == nil {
+		return fmt.Errorf("QueryInterface returned nil IPersistFile")
+	}
+	defer persist.Release()
+
+	if err := persist.Save(shortcutPath, true); err != nil {
+		return err
+	}
+	if err := persist.SaveCompleted(); err != nil {
 		return err
 	}
 	return nil
-}
-
-func regValueExists(key syscall.Handle, name string) (bool, error) {
-	namePtr, err := syscall.UTF16PtrFromString(name)
-	if err != nil {
-		return false, err
-	}
-	var valueType uint32
-	var size uint32
-	r0, _, e1 := procRegQueryValueEx.Call(
-		uintptr(key),
-		uintptr(unsafe.Pointer(namePtr)),
-		0,
-		uintptr(unsafe.Pointer(&valueType)),
-		0,
-		uintptr(unsafe.Pointer(&size)),
-	)
-	if r0 == 0 {
-		return true, nil
-	}
-	if err := winErrorFromReturn(r0, e1); err != nil {
-		if err == errFileNotFound {
-			return false, nil
-		}
-		return false, err
-	}
-	return false, nil
-}
-
-func winErrorFromReturn(r uintptr, lastErr error) error {
-	if r == 0 {
-		return nil
-	}
-	if lastErr != nil && lastErr != syscall.Errno(0) {
-		return lastErr
-	}
-	return syscall.Errno(r)
 }
