@@ -12,7 +12,7 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
 1. **Clone the repository**
    ```powershell/bash
    git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   Set-Location vrchat-join-notification-with-pushover
+   cd vrchat-join-notification-with-pushover
    ```
 ### Windows native tray companion (Go)
 
