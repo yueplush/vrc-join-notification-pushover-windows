@@ -203,15 +203,21 @@ func registerClass(className string, wndProc uintptr, icon syscall.Handle) error
 	return nil
 }
 
-func createWindow(className, title string, width, height int32, param uintptr) (syscall.Handle, error) {
+func createWindow(className, title string, width, height int32, param uintptr, visible bool) (syscall.Handle, error) {
 	hInstance, _, _ := modKernel32.NewProc("GetModuleHandleW").Call(0)
 	clsName, _ := syscall.UTF16PtrFromString(className)
 	wndTitle, _ := syscall.UTF16PtrFromString(title)
+	exStyle := uintptr(0)
+	style := uintptr(wsOverlappedWindow)
+	if visible {
+		exStyle = uintptr(wsExAppWindow)
+		style |= wsVisible
+	}
 	hwnd, _, err := procCreateWindowEx.Call(
-		wsExAppWindow,
+		exStyle,
 		uintptr(unsafe.Pointer(clsName)),
 		uintptr(unsafe.Pointer(wndTitle)),
-		wsOverlappedWindow|wsVisible,
+		style,
 		uintptr(cwUseDefault),
 		uintptr(cwUseDefault),
 		uintptr(width),
