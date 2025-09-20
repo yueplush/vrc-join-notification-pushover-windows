@@ -196,9 +196,9 @@ func (c *Controller) buildUI() {
 	c.installEntry.SetText(c.cfg.InstallDir)
 	c.logEntry = widget.NewEntry()
 	c.logEntry.SetText(c.cfg.VRChatLogDir)
-	c.userEntry = widget.NewEntry()
+	c.userEntry = widget.NewPasswordEntry()
 	c.userEntry.SetText(c.cfg.PushoverUser)
-	c.tokenEntry = widget.NewEntry()
+	c.tokenEntry = widget.NewPasswordEntry()
 	c.tokenEntry.SetText(c.cfg.PushoverToken)
 
 	browseInstall := widget.NewButton("Browse...", func() {
@@ -425,13 +425,22 @@ func (c *Controller) saveOnly() {
 }
 
 func (c *Controller) saveConfig() error {
-	c.cfg.InstallDir = expandPath(c.installEntry.Text)
-	c.cfg.VRChatLogDir = expandPath(c.logEntry.Text)
-	c.cfg.PushoverUser = strings.TrimSpace(c.userEntry.Text)
-	c.cfg.PushoverToken = strings.TrimSpace(c.tokenEntry.Text)
+	installDir := expandPath(c.installEntry.Text)
+	logDir := expandPath(c.logEntry.Text)
+	pushoverUser := strings.TrimSpace(c.userEntry.Text)
+	pushoverToken := strings.TrimSpace(c.tokenEntry.Text)
+
+	c.cfg.InstallDir = installDir
+	c.cfg.VRChatLogDir = logDir
+	c.cfg.PushoverUser = pushoverUser
+	c.cfg.PushoverToken = pushoverToken
 	if err := c.cfg.Save(); err != nil {
 		return err
 	}
+	c.installEntry.SetText(c.cfg.InstallDir)
+	c.logEntry.SetText(c.cfg.VRChatLogDir)
+	c.userEntry.SetText(c.cfg.PushoverUser)
+	c.tokenEntry.SetText(c.cfg.PushoverToken)
 	if c.logger != nil {
 		c.logger.Log("Settings saved.")
 	}
