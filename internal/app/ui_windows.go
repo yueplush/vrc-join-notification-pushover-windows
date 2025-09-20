@@ -20,6 +20,8 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
+
+	"vrchat-join-notification-with-pushover/internal/assets"
 )
 
 const (
@@ -46,6 +48,8 @@ type Controller struct {
 
 	app    fyne.App
 	window fyne.Window
+
+	iconData []byte
 
 	installEntry *widget.Entry
 	logEntry     *widget.Entry
@@ -81,9 +85,11 @@ type Controller struct {
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 
-	windowStateMu   sync.Mutex
-	windowHandle    syscall.Handle
-	windowMinimized bool
+	windowStateMu     sync.Mutex
+	windowHandle      syscall.Handle
+	windowMinimized   bool
+	windowIconApplied bool
+	windowIconHandle  syscall.Handle
 }
 
 // NewController constructs the Fyne based GUI controller.
@@ -114,14 +120,14 @@ func NewController(cfg *AppConfig, loadNotice string, logger *AppLogger) (*Contr
 	controller.updateStartupButtons()
 	controller.applyStartupState()
 
-	iconPath := locateNotificationIcon()
-	if iconPath != "" {
-		if data, err := os.ReadFile(iconPath); err == nil {
-			controller.window.SetIcon(fyne.NewStaticResource(filepath.Base(iconPath), data))
-		}
+	controller.iconData = notificationIconData()
+	if len(controller.iconData) > 0 {
+		resource := fyne.NewStaticResource(assets.NotificationIconName(), controller.iconData)
+		controller.app.SetIcon(resource)
+		controller.window.SetIcon(resource)
 	}
 
-	controller.initSystemTray(iconPath)
+	controller.initSystemTray()
 
 	go controller.consumeEvents()
 	return controller, nil
@@ -155,6 +161,7 @@ func (c *Controller) runOnMain(fn func()) {
 func (c *Controller) cleanup() {
 	c.stopMonitoring()
 	c.shutdownTray()
+	c.releaseWindowIcon()
 	close(c.eventCh)
 	<-c.eventDone
 }
@@ -609,7 +616,7 @@ func removeStartupEntry() error {
 	return regDeleteValue(key, AppName)
 }
 
-func (c *Controller) initSystemTray(iconPath string) {
+func (c *Controller) initSystemTray() {
 	if c.tray != nil {
 		return
 	}
@@ -620,7 +627,7 @@ func (c *Controller) initSystemTray(iconPath string) {
 		{ID: trayMenuResetID, Title: "Reset Monitoring", Action: c.resetMonitoringFromTray},
 		{ID: trayMenuExitID, Title: "Exit", Action: c.exitFromTray},
 	}
-	tray, err := NewSystemTray(iconPath, AppName, c.openSettingsFromTray, items)
+	tray, err := NewSystemTray(c.iconData, AppName, c.openSettingsFromTray, items)
 	if err != nil {
 		if c.logger != nil {
 			c.logger.Logf("Failed to initialise system tray: %v", err)
@@ -680,15 +687,61 @@ func (c *Controller) watchWindowMinimise() {
 }
 
 func (c *Controller) setWindowHandle(hwnd syscall.Handle) {
+	var previous syscall.Handle
+	var alreadyApplied bool
+
 	c.windowStateMu.Lock()
+	previous = c.windowHandle
+	alreadyApplied = c.windowIconApplied
 	c.windowHandle = hwnd
+	if hwnd == 0 {
+		c.windowIconApplied = false
+	}
 	c.windowStateMu.Unlock()
+
+	if hwnd != 0 && (previous != hwnd || !alreadyApplied) {
+		c.applyWindowIcon(hwnd)
+	}
 }
 
 func (c *Controller) getWindowHandle() syscall.Handle {
 	c.windowStateMu.Lock()
 	defer c.windowStateMu.Unlock()
 	return c.windowHandle
+}
+
+func (c *Controller) applyWindowIcon(hwnd syscall.Handle) {
+	if len(c.iconData) == 0 {
+		return
+	}
+	c.windowStateMu.Lock()
+	iconHandle := c.windowIconHandle
+	if iconHandle == 0 {
+		iconHandle = loadIconFromBytes(c.iconData)
+		if iconHandle != 0 {
+			c.windowIconHandle = iconHandle
+		}
+	}
+	c.windowStateMu.Unlock()
+	if iconHandle == 0 {
+		return
+	}
+	if setWindowIconHandle(hwnd, iconHandle) {
+		c.windowStateMu.Lock()
+		c.windowIconApplied = true
+		c.windowStateMu.Unlock()
+	}
+}
+
+func (c *Controller) releaseWindowIcon() {
+	c.windowStateMu.Lock()
+	iconHandle := c.windowIconHandle
+	c.windowIconHandle = 0
+	c.windowIconApplied = false
+	c.windowStateMu.Unlock()
+	if iconHandle != 0 {
+		destroyIcon(iconHandle)
+	}
 }
 
 func (c *Controller) setWindowMinimized(min bool) bool {
@@ -734,6 +787,18 @@ func (c *Controller) exitFromTray() {
 }
 
 // locateNotificationIcon searches common paths for notification.ico.
+func notificationIconData() []byte {
+	if len(assets.NotificationIcon) > 0 {
+		return assets.NotificationIcon
+	}
+	if path := locateNotificationIcon(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			return data
+		}
+	}
+	return nil
+}
+
 func locateNotificationIcon() string {
 	candidates := []string{}
 	if exe, err := osExecutable(); err == nil {

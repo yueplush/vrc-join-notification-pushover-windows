@@ -1,5 +1,7 @@
 //go:build windows
 
+//go:generate go run github.com/akavel/rsrc/rsrc -ico ../../src/notification.ico -o resource_windows.syso
+
 package main
 
 import (
@@ -13,6 +15,8 @@ import (
 func main() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	app.HideConsoleWindow()
 
 	guard, err := app.AcquireSingleInstance("VRChatJoinNotificationWithPushover")
 	if err != nil {
