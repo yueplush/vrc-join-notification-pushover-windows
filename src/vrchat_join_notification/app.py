@@ -2549,8 +2549,7 @@ class AppController:
             if not args:
                 raise RuntimeError("Unable to determine launch command.")
             if os.name == "nt":
-                self._add_to_startup_windows(args)
-                entry_description = r"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+                entry_description = self._add_to_startup_windows(args, workdir)
             else:
                 entry_description = self._add_to_startup_unix(args, workdir)
         except Exception as exc:
@@ -2789,21 +2788,82 @@ class AppController:
             handle.write("\n".join(lines) + "\n")
         return entry_path
 
-    def _add_to_startup_windows(self, args: List[str]) -> None:
-        command = self._format_exec_command(args)
+    def _windows_startup_shortcut_path(self) -> str:
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            raise RuntimeError("APPDATA environment variable is not set")
+        startup_dir = os.path.join(
+            appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"
+        )
+        return os.path.join(startup_dir, f"{APP_NAME}.lnk")
+
+    def _create_windows_shortcut(
+        self,
+        shortcut_path: str,
+        target_path: str,
+        arguments: str,
+        workdir: Optional[str],
+    ) -> None:
+        def _vb_escape(value: str) -> str:
+            return value.replace("\"", "\"\"")
+
+        lines = [
+            'Set oWS = CreateObject("WScript.Shell")',
+            f'Set oLink = oWS.CreateShortcut("{_vb_escape(shortcut_path)}")',
+            f'oLink.TargetPath = "{_vb_escape(target_path)}"',
+        ]
+        if arguments:
+            lines.append(f'oLink.Arguments = "{_vb_escape(arguments)}"')
+        if workdir:
+            lines.append(f'oLink.WorkingDirectory = "{_vb_escape(workdir)}"')
+        if target_path:
+            lines.append(f'oLink.IconLocation = "{_vb_escape(target_path)},0"')
+        lines.append("oLink.Save")
+        script_contents = "\r\n".join(lines) + "\r\n"
+        script_path = ""
         try:
-            import winreg  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover - defensive
-            raise RuntimeError("winreg module is unavailable") from exc
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        try:
-            key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".vbs", delete=False, encoding="utf-8"
+            ) as handle:
+                handle.write(script_contents)
+                script_path = handle.name
+            command = ["cscript", "//NoLogo", script_path]
             try:
-                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
-            finally:
-                winreg.CloseKey(key)
+                subprocess.run(
+                    command,
+                    check=True,
+                    **_windows_hide_window_kwargs(),
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError("cscript.exe is not available") from exc
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    f"Shortcut creation failed with exit code {exc.returncode}"
+                ) from exc
+        finally:
+            if script_path:
+                try:
+                    os.remove(script_path)
+                except OSError:
+                    pass
+
+    def _add_to_startup_windows(self, args: List[str], workdir: Optional[str]) -> str:
+        if not args:
+            raise RuntimeError("Unable to determine launch command.")
+        shortcut_path = self._windows_startup_shortcut_path()
+        shortcut_dir = os.path.dirname(shortcut_path)
+        if shortcut_dir:
+            os.makedirs(shortcut_dir, exist_ok=True)
+        target = os.path.abspath(args[0])
+        arguments = subprocess.list2cmdline(args[1:]) if len(args) > 1 else ""
+        working_directory = workdir or os.path.dirname(target)
+        try:
+            self._create_windows_shortcut(
+                shortcut_path, target, arguments, working_directory
+            )
         except OSError as exc:
-            raise RuntimeError(f"Unable to update registry: {exc}")
+            raise RuntimeError(f"Unable to create startup shortcut: {exc}")
+        return shortcut_path
 
     def _remove_from_startup_unix(self) -> str:
         entry_path = self._autostart_entry_path()
@@ -2812,44 +2872,21 @@ class AppController:
         return entry_path
 
     def _remove_from_startup_windows(self) -> str:
+        shortcut_path = self._windows_startup_shortcut_path()
         try:
-            import winreg  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover - defensive
-            raise RuntimeError("winreg module is unavailable") from exc
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-        except FileNotFoundError:
-            return r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
-        try:
-            try:
-                winreg.DeleteValue(key, APP_NAME)
-            except FileNotFoundError:
-                pass
-        finally:
-            winreg.CloseKey(key)
-        return r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
+            if os.path.exists(shortcut_path):
+                os.remove(shortcut_path)
+        except OSError as exc:
+            raise RuntimeError(f"Unable to remove startup shortcut: {exc}")
+        return shortcut_path
 
     def _autostart_entry_exists(self) -> bool:
         if os.name == "nt":
             try:
-                import winreg  # type: ignore[import-not-found]
+                shortcut_path = self._windows_startup_shortcut_path()
             except Exception:
                 return False
-            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            try:
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
-            except FileNotFoundError:
-                return False
-            try:
-                value, _ = winreg.QueryValueEx(key, APP_NAME)
-                return bool(value)
-            except FileNotFoundError:
-                return False
-            except OSError:
-                return False
-            finally:
-                winreg.CloseKey(key)
+            return os.path.exists(shortcut_path)
         try:
             return os.path.exists(self._autostart_entry_path())
         except Exception:
