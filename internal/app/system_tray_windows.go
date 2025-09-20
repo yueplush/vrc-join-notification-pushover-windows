@@ -88,7 +88,7 @@ func (t *SystemTray) run(iconPath string) {
 			return
 		}
 	}
-	hwnd, err := createWindow(className, tooltipOrDefault(t.tooltip), 0, 0, 0, 0, 0)
+	hwnd, err := createWindow(className, tooltipOrDefault(t.tooltip), 0, 0, 0)
 	if err != nil {
 		t.ready <- err
 		return
