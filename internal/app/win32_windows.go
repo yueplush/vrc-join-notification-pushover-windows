@@ -20,48 +20,50 @@ var (
 )
 
 var (
-	procRegisterClassEx    = modUser32.NewProc("RegisterClassExW")
-	procCreateWindowEx     = modUser32.NewProc("CreateWindowExW")
-	procDefWindowProc      = modUser32.NewProc("DefWindowProcW")
-	procDestroyWindow      = modUser32.NewProc("DestroyWindow")
-	procShowWindow         = modUser32.NewProc("ShowWindow")
-	procUpdateWindow       = modUser32.NewProc("UpdateWindow")
-	procGetMessage         = modUser32.NewProc("GetMessageW")
-	procTranslateMessage   = modUser32.NewProc("TranslateMessage")
-	procDispatchMessage    = modUser32.NewProc("DispatchMessageW")
-	procPostQuitMessage    = modUser32.NewProc("PostQuitMessage")
-	procSendMessage        = modUser32.NewProc("SendMessageW")
-	procSetWindowText      = modUser32.NewProc("SetWindowTextW")
-	procGetWindowText      = modUser32.NewProc("GetWindowTextW")
-	procGetWindowTextLen   = modUser32.NewProc("GetWindowTextLengthW")
-	procCreateMenu         = modUser32.NewProc("CreatePopupMenu")
-	procAppendMenu         = modUser32.NewProc("AppendMenuW")
-	procTrackPopupMenu     = modUser32.NewProc("TrackPopupMenu")
-	procSetForegroundWnd   = modUser32.NewProc("SetForegroundWindow")
-	procGetCursorPos       = modUser32.NewProc("GetCursorPos")
-	procLoadCursor         = modUser32.NewProc("LoadCursorW")
-	procLoadIcon           = modUser32.NewProc("LoadIconW")
-	procLoadImage          = modUser32.NewProc("LoadImageW")
-	procDestroyIcon        = modUser32.NewProc("DestroyIcon")
-	procSendDlgItemMessage = modUser32.NewProc("SendMessageW")
-	procSetWindowPos       = modUser32.NewProc("SetWindowPos")
-	procGetClientRect      = modUser32.NewProc("GetClientRect")
-	procMoveWindow         = modUser32.NewProc("MoveWindow")
-	procShellNotifyIcon    = modShell32.NewProc("Shell_NotifyIconW")
-	procGetStockObject     = modGdi32.NewProc("GetStockObject")
-	procPostMessage        = modUser32.NewProc("PostMessageW")
-	procMessageBox         = modUser32.NewProc("MessageBoxW")
-	procFindWindow         = modUser32.NewProc("FindWindowW")
-	procIsIconic           = modUser32.NewProc("IsIconic")
-	procIsWindow           = modUser32.NewProc("IsWindow")
-	procCreateMutex        = modKernel32.NewProc("CreateMutexW")
-	procReleaseMutex       = modKernel32.NewProc("ReleaseMutex")
-	procCloseHandle        = modKernel32.NewProc("CloseHandle")
-	procGetConsoleWindow   = modKernel32.NewProc("GetConsoleWindow")
-	procEnableWindow       = modUser32.NewProc("EnableWindow")
-	procCoInitializeEx     = modOle32.NewProc("CoInitializeEx")
-	procCoUninitialize     = modOle32.NewProc("CoUninitialize")
-	procCoCreateInstance   = modOle32.NewProc("CoCreateInstance")
+	procRegisterClassEx       = modUser32.NewProc("RegisterClassExW")
+	procCreateWindowEx        = modUser32.NewProc("CreateWindowExW")
+	procDefWindowProc         = modUser32.NewProc("DefWindowProcW")
+	procDestroyWindow         = modUser32.NewProc("DestroyWindow")
+	procShowWindow            = modUser32.NewProc("ShowWindow")
+	procUpdateWindow          = modUser32.NewProc("UpdateWindow")
+	procGetMessage            = modUser32.NewProc("GetMessageW")
+	procTranslateMessage      = modUser32.NewProc("TranslateMessage")
+	procDispatchMessage       = modUser32.NewProc("DispatchMessageW")
+	procPostQuitMessage       = modUser32.NewProc("PostQuitMessage")
+	procSendMessage           = modUser32.NewProc("SendMessageW")
+	procSetWindowText         = modUser32.NewProc("SetWindowTextW")
+	procGetWindowText         = modUser32.NewProc("GetWindowTextW")
+	procGetWindowTextLen      = modUser32.NewProc("GetWindowTextLengthW")
+	procCreateMenu            = modUser32.NewProc("CreatePopupMenu")
+	procAppendMenu            = modUser32.NewProc("AppendMenuW")
+	procTrackPopupMenu        = modUser32.NewProc("TrackPopupMenu")
+	procSetForegroundWnd      = modUser32.NewProc("SetForegroundWindow")
+	procGetCursorPos          = modUser32.NewProc("GetCursorPos")
+	procLoadCursor            = modUser32.NewProc("LoadCursorW")
+	procLoadIcon              = modUser32.NewProc("LoadIconW")
+	procLoadImage             = modUser32.NewProc("LoadImageW")
+	procDestroyIcon           = modUser32.NewProc("DestroyIcon")
+	procSendDlgItemMessage    = modUser32.NewProc("SendMessageW")
+	procSetWindowPos          = modUser32.NewProc("SetWindowPos")
+	procGetClientRect         = modUser32.NewProc("GetClientRect")
+	procMoveWindow            = modUser32.NewProc("MoveWindow")
+	procShellNotifyIcon       = modShell32.NewProc("Shell_NotifyIconW")
+	procGetStockObject        = modGdi32.NewProc("GetStockObject")
+	procPostMessage           = modUser32.NewProc("PostMessageW")
+	procMessageBox            = modUser32.NewProc("MessageBoxW")
+	procFindWindow            = modUser32.NewProc("FindWindowW")
+	procIsIconic              = modUser32.NewProc("IsIconic")
+	procIsWindow              = modUser32.NewProc("IsWindow")
+	procCreateMutex           = modKernel32.NewProc("CreateMutexW")
+	procReleaseMutex          = modKernel32.NewProc("ReleaseMutex")
+	procCloseHandle           = modKernel32.NewProc("CloseHandle")
+	procGetConsoleWindow      = modKernel32.NewProc("GetConsoleWindow")
+	procFreeConsole           = modKernel32.NewProc("FreeConsole")
+	procGetConsoleProcessList = modKernel32.NewProc("GetConsoleProcessList")
+	procEnableWindow          = modUser32.NewProc("EnableWindow")
+	procCoInitializeEx        = modOle32.NewProc("CoInitializeEx")
+	procCoUninitialize        = modOle32.NewProc("CoUninitialize")
+	procCoCreateInstance      = modOle32.NewProc("CoCreateInstance")
 )
 
 const (
@@ -414,6 +416,52 @@ func hideConsoleWindow() {
 		return
 	}
 	procShowWindow.Call(uintptr(hwnd), swHide)
+	if shouldFreeConsole() {
+		procFreeConsole.Call()
+	}
+}
+
+func shouldFreeConsole() bool {
+	// Determine whether the console is shared with another process before
+	// detaching from it. When the executable is launched from a console we
+	// leave it attached so that users can still see the logs. When the
+	// executable is started from Windows Explorer or on login, we are the
+	// only process attached to the console and it is safe to release it so
+	// the console window disappears completely.
+	count, processIDs := consoleProcessList()
+	if count == 0 {
+		return false
+	}
+	ourPID := uint32(os.Getpid())
+	for i := uint32(0); i < count && i < uint32(len(processIDs)); i++ {
+		if processIDs[i] != ourPID {
+			return false
+		}
+	}
+	return true
+}
+
+func consoleProcessList() (uint32, []uint32) {
+	var stackBuf [4]uint32
+	count := getConsoleProcessList(stackBuf[:])
+	if count == 0 {
+		return 0, nil
+	}
+	if count <= uint32(len(stackBuf)) {
+		return count, stackBuf[:]
+	}
+
+	buf := make([]uint32, count)
+	count = getConsoleProcessList(buf)
+	return count, buf
+}
+
+func getConsoleProcessList(buf []uint32) uint32 {
+	if len(buf) == 0 {
+		return 0
+	}
+	ret, _, _ := procGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return uint32(ret)
 }
 
 func getCursorPos() (point, bool) {
