@@ -3,12 +3,10 @@
 package app
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -28,8 +26,7 @@ const (
 	windowWidth  = 880
 	windowHeight = 520
 
-	startupRegistryPath        = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-	startupRegistryDescription = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+	startupShortcutName = AppName + ".lnk"
 
 	trayMenuOpenSettingsID uint16 = 1
 	trayMenuStartID        uint16 = 2
@@ -531,7 +528,7 @@ func (c *Controller) updateStartupButtons() {
 	}
 }
 
-func (c *Controller) startupCommand() (string, error) {
+func (c *Controller) startupTarget() (string, error) {
 	exe, err := osExecutable()
 	if err != nil {
 		return "", err
@@ -539,35 +536,41 @@ func (c *Controller) startupCommand() (string, error) {
 	if strings.TrimSpace(exe) == "" {
 		return "", fmt.Errorf("unable to determine executable path")
 	}
-	return strconv.Quote(exe), nil
+	return filepath.Clean(exe), nil
 }
 
 func (c *Controller) addToStartup() {
-	command, err := c.startupCommand()
+	target, err := c.startupTarget()
 	if err != nil {
 		c.handleStartupError("Failed to determine startup command", err)
 		return
 	}
-	if err := setStartupEntry(command); err != nil {
+	shortcutPath, err := setStartupEntry(target)
+	if err != nil {
 		c.handleStartupError("Failed to add to startup", err)
 		return
 	}
 	c.setStatus("Added to startup.")
 	if c.logger != nil {
-		c.logger.Logf("Startup entry created at %s", startupRegistryDescription)
+		c.logger.Logf("Startup shortcut created at %s", shortcutPath)
 	}
 	c.notifier.Send(AppName, "Added to startup.")
 	c.updateStartupButtons()
 }
 
 func (c *Controller) removeFromStartup() {
-	if err := removeStartupEntry(); err != nil {
+	shortcutPath, err := startupShortcutPath()
+	if err != nil {
+		c.handleStartupError("Failed to resolve startup location", err)
+		return
+	}
+	if err := removeStartupEntry(shortcutPath); err != nil {
 		c.handleStartupError("Failed to remove from startup", err)
 		return
 	}
 	c.setStatus("Removed from startup.")
 	if c.logger != nil {
-		c.logger.Logf("Startup entry removed from %s", startupRegistryDescription)
+		c.logger.Logf("Startup shortcut removed from %s", shortcutPath)
 	}
 	c.notifier.Send(AppName, "Removed from startup.")
 	c.updateStartupButtons()
@@ -584,36 +587,59 @@ func (c *Controller) handleStartupError(action string, err error) {
 }
 
 func startupEntryExists() (bool, error) {
-	key, err := regOpenKey(hkeyCurrentUser, startupRegistryPath, keyQueryValue)
+	shortcutPath, err := startupShortcutPath()
 	if err != nil {
-		if errors.Is(err, errFileNotFound) {
-			return false, nil
-		}
 		return false, err
 	}
-	defer regCloseKey(key)
-	return regValueExists(key, AppName)
+	return fileExists(shortcutPath), nil
 }
 
-func setStartupEntry(command string) error {
-	key, err := regCreateKey(hkeyCurrentUser, startupRegistryPath, keyRead|keyWrite)
-	if err != nil {
-		return err
+func setStartupEntry(target string) (string, error) {
+	if strings.TrimSpace(target) == "" {
+		return "", fmt.Errorf("startup target is empty")
 	}
-	defer regCloseKey(key)
-	return regSetStringValue(key, AppName, command)
+	shortcutPath, err := startupShortcutPath()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(shortcutPath), 0o755); err != nil {
+		return "", err
+	}
+	workingDir := filepath.Dir(target)
+	if err := createShortcut(shortcutPath, target, "", workingDir, AppName); err != nil {
+		return "", err
+	}
+	return shortcutPath, nil
 }
 
-func removeStartupEntry() error {
-	key, err := regOpenKey(hkeyCurrentUser, startupRegistryPath, keySetValue)
-	if err != nil {
-		if errors.Is(err, errFileNotFound) {
+func removeStartupEntry(shortcutPath string) error {
+	if strings.TrimSpace(shortcutPath) == "" {
+		return fmt.Errorf("startup shortcut path is empty")
+	}
+	if err := os.Remove(shortcutPath); err != nil {
+		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	defer regCloseKey(key)
-	return regDeleteValue(key, AppName)
+	return nil
+}
+
+func startupShortcutPath() (string, error) {
+	dir, err := startupDirectory()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, startupShortcutName), nil
+}
+
+func startupDirectory() (string, error) {
+	base := strings.TrimSpace(os.Getenv("ProgramData"))
+	if base == "" {
+		base = `C:\\ProgramData`
+	}
+	dir := filepath.Join(base, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+	return dir, nil
 }
 
 func (c *Controller) initSystemTray() {
