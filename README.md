@@ -9,11 +9,6 @@ Resident desktop companion that watches your VRChat logs and pings you on the de
 
 ## Quick install from source
 
-1. **Clone the repository**
-   ```powershell/bash
-   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
-   cd vrchat-join-notification-with-pushover
-   ```
 ### Windows native tray companion (Go)
 
 Prefer a small self-contained `.exe` with a built-in settings UI that mirrors the desktop companion screenshot above? Compile the Go implementation that lives in `cmd/VRChatJoinNotificationWithPushover` – it now ships with a Fyne v2 interface tailored for Windows.
@@ -26,18 +21,24 @@ Prefer a small self-contained `.exe` with a built-in settings UI that mirrors th
 
 **Build & run**
 
-1. **Fetch dependencies**
+1. **Clone the repository**
+   ```powershell/bash
+   git clone https://github.com/yueplush/vrchat-join-notification-with-pushover.git
+   set-location vrchat-join-notification-with-pushover
+   ```
+   
+2. **Fetch dependencies**
    ```powershell
    go mod tidy
    ```
    (This downloads the Fyne v2 GUI toolkit.)
 
-2. **Compile the application**
+3. **Compile the application**
    ```powershell
    go build -o bin/VRChatJoinNotificationWithPushover.exe ./cmd/VRChatJoinNotificationWithPushover
    ```
    The build embeds no external assets – just ensure `notification.ico` sits next to the executable (it is already present in the repository root).
-3. **Launch the watcher**
+4. **Launch the watcher**
    ```powershell
    .\bin\VRChatJoinNotificationWithPushover.exe
    ```
