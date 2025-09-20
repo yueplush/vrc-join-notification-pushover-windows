@@ -40,7 +40,7 @@ const (
 
 var trayInstances sync.Map
 
-func NewSystemTray(iconPath, tooltip string, onDoubleClick func(), items []TrayMenuItem) (*SystemTray, error) {
+func NewSystemTray(iconData []byte, tooltip string, onDoubleClick func(), items []TrayMenuItem) (*SystemTray, error) {
 	tray := &SystemTray{
 		tooltip:       tooltip,
 		onDoubleClick: onDoubleClick,
@@ -49,7 +49,7 @@ func NewSystemTray(iconPath, tooltip string, onDoubleClick func(), items []TrayM
 		ready:         make(chan error, 1),
 		done:          make(chan struct{}),
 	}
-	go tray.run(iconPath)
+	go tray.run(iconData)
 	err := <-tray.ready
 	if err != nil {
 		<-tray.done
@@ -68,17 +68,20 @@ func (t *SystemTray) Close() {
 	<-t.done
 }
 
-func (t *SystemTray) run(iconPath string) {
+func (t *SystemTray) run(iconData []byte) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(t.done)
 	defer close(t.ready)
 
-	icon := loadIconFromFile(iconPath)
+	icon := loadIconFromBytes(iconData)
 	if icon == 0 {
 		icon = loadDefaultIcon()
 	}
 	t.icon = icon
+	if icon != 0 {
+		defer destroyIcon(icon)
+	}
 
 	wndProc := syscall.NewCallback(trayWindowProc)
 	className := "VRChatJoinNotificationWithPushoverTray"

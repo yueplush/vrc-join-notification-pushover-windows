@@ -4,6 +4,7 @@ package app
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -40,6 +41,7 @@ var (
 	procLoadCursor         = modUser32.NewProc("LoadCursorW")
 	procLoadIcon           = modUser32.NewProc("LoadIconW")
 	procLoadImage          = modUser32.NewProc("LoadImageW")
+	procDestroyIcon        = modUser32.NewProc("DestroyIcon")
 	procSendDlgItemMessage = modUser32.NewProc("SendMessageW")
 	procSetWindowPos       = modUser32.NewProc("SetWindowPos")
 	procGetClientRect      = modUser32.NewProc("GetClientRect")
@@ -54,6 +56,7 @@ var (
 	procCreateMutex        = modKernel32.NewProc("CreateMutexW")
 	procReleaseMutex       = modKernel32.NewProc("ReleaseMutex")
 	procCloseHandle        = modKernel32.NewProc("CloseHandle")
+	procGetConsoleWindow   = modKernel32.NewProc("GetConsoleWindow")
 	procEnableWindow       = modUser32.NewProc("EnableWindow")
 	procRegCreateKeyEx     = modAdvapi32.NewProc("RegCreateKeyExW")
 	procRegOpenKeyEx       = modAdvapi32.NewProc("RegOpenKeyExW")
@@ -82,7 +85,9 @@ const (
 	wmApp           = 0x8000
 	wmUser          = 0x0400
 	wmSetFont       = 0x0030
+	wmSetIcon       = 0x0080
 
+	swHide    = 0
 	swShow    = 5
 	swRestore = 9
 
@@ -308,6 +313,15 @@ func restoreWindow(hwnd syscall.Handle) {
 	procSetForegroundWnd.Call(uintptr(hwnd))
 }
 
+func setWindowIconHandle(hwnd, icon syscall.Handle) bool {
+	if hwnd == 0 || icon == 0 {
+		return false
+	}
+	procSendMessage.Call(uintptr(hwnd), wmSetIcon, iconSmall, uintptr(icon))
+	procSendMessage.Call(uintptr(hwnd), wmSetIcon, iconBig, uintptr(icon))
+	return true
+}
+
 func findWindowByTitle(title string) syscall.Handle {
 	if strings.TrimSpace(title) == "" {
 		return 0
@@ -356,9 +370,52 @@ func loadIconFromFile(path string) syscall.Handle {
 	return syscall.Handle(handle)
 }
 
+func loadIconFromBytes(data []byte) syscall.Handle {
+	if len(data) == 0 {
+		return 0
+	}
+	file, err := os.CreateTemp("", "vrchat-notification-icon-*.ico")
+	if err != nil {
+		return 0
+	}
+	name := file.Name()
+	if _, err = file.Write(data); err != nil {
+		file.Close()
+		os.Remove(name)
+		return 0
+	}
+	if err = file.Close(); err != nil {
+		os.Remove(name)
+		return 0
+	}
+	handle := loadIconFromFile(name)
+	os.Remove(name)
+	return handle
+}
+
 func loadDefaultIcon() syscall.Handle {
 	handle, _, _ := procLoadIcon.Call(0, 32512) // IDI_APPLICATION
 	return syscall.Handle(handle)
+}
+
+func destroyIcon(icon syscall.Handle) {
+	if icon == 0 {
+		return
+	}
+	procDestroyIcon.Call(uintptr(icon))
+}
+
+func getConsoleWindowHandle() syscall.Handle {
+	hwnd, _, _ := procGetConsoleWindow.Call()
+	return syscall.Handle(hwnd)
+}
+
+func hideConsoleWindow() {
+	hwnd := getConsoleWindowHandle()
+	if hwnd == 0 {
+		return
+	}
+	procShowWindow.Call(uintptr(hwnd), swHide)
 }
 
 func getCursorPos() (point, bool) {
@@ -370,6 +427,11 @@ func getCursorPos() (point, bool) {
 const (
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+)
+
+const (
+	iconSmall = 0
+	iconBig   = 1
 )
 
 const (
